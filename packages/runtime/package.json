@@ -1,0 +1,13 @@
+{
+  "name": "@knowledge/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "^1.32.0",
+    "webr": "^0.6.0"
+  }
+}

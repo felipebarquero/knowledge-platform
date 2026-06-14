@@ -1,0 +1,503 @@
+# Definitions sidecar — the shared layer between the author, the workshop UI,
+# and AI assistants. Edit by hand, in the studio Workshop, or ask Claude.
+
+components:
+  # ── Runnable code ───────────────────────────────────────────────────
+  sprint_query:
+    type: sql
+    description: |-
+      SELECT
+        m.name,
+        m.country,
+        AVG(s.sprint_time) AS mean_time,
+        COUNT(*)           AS sessions
+      FROM sprint_study s
+      JOIN athlete_meta m USING (athlete_id)
+      WHERE s.week BETWEEN 1 AND 6
+      GROUP BY m.name, m.country
+      ORDER BY mean_time ASC;
+    options:
+      title: SQL Console · sprint_study ⋈ athlete_meta
+      maxRows: 10
+      elapsed: 0.3s
+      # Recorded snapshot (fallback). DuckDB-WASM runs this JOIN live on load.
+      result:
+        - { name: Lia Sun, country: Singapore, mean_time: 10.84, sessions: 6 }
+        - { name: Mara Voss, country: Germany, mean_time: 11.00, sessions: 6 }
+        - { name: Noa Park, country: Korea, mean_time: 11.22, sessions: 6 }
+        - { name: Jonas Kerr, country: Germany, mean_time: 11.47, sessions: 6 }
+        - { name: Ivo Costa, country: Portugal, mean_time: 11.50, sessions: 6 }
+        - { name: Theo Blanc, country: France, mean_time: 11.76, sessions: 6 }
+
+  warehouse_query:
+    type: sql
+    description: |-
+      SELECT
+        m.country,
+        COUNT(*)                    AS sessions,
+        ROUND(AVG(s.sprint_time),2) AS mean_time
+      FROM sprint_study s
+      JOIN athlete_meta m USING (athlete_id)
+      GROUP BY m.country
+      ORDER BY mean_time;
+    options:
+      title: Warehouse · on-prem SQL
+      engine: server
+      connection: local
+      elapsed: 6ms
+      # Recorded fallback for hosts without the gateway. The query runs on the
+      # on-prem server (DuckDB / Postgres / MySQL) — big tables never reach the
+      # browser; only these rows do.
+      result:
+        - { country: Singapore, sessions: 16, mean_time: 10.78 }
+        - { country: Germany, sessions: 32, mean_time: 11.15 }
+        - { country: Korea, sessions: 16, mean_time: 11.15 }
+        - { country: Portugal, sessions: 16, mean_time: 11.50 }
+        - { country: France, sessions: 16, mean_time: 11.65 }
+
+  model_fit:
+    type: code
+    data:
+      ref: sprint_study
+    description: |-
+      library(lme4)
+
+      model <- lmer(
+        sprint_time ~ training_load + week + (1 | athlete_id),
+        data = sprint_study
+      )
+      summary(model)
+    options:
+      language: r
+      title: fit-mixed-model.R
+      elapsed: 0.6s
+      # Recorded REPL output — a runnable WASM R environment arrives in Phase 5.
+      # Text = stdout, table = the coefficients dataframe, info = debug values,
+      # plot = a recorded image (data URI).
+      output: |-
+        Linear mixed model fit by REML ['lmerMod']
+        Formula: sprint_time ~ training_load + week + (1 | athlete_id)
+           Data: sprints
+
+        Random effects:
+         Groups      Name        Variance Std.Dev.
+         athlete_id  (Intercept) 0.1284   0.3583
+         Residual                0.2147   0.4632
+        Number of obs: 96, groups:  athlete_id, 6
+
+        Fixed effects:
+                       Estimate Std. Error t value
+        (Intercept)   11.345234   0.092100  123.18
+        training_load -0.000231   0.000350   -6.60
+        week          -0.008100   0.001900   -4.26
+        ---
+        Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05
+      result:
+        - {
+            term: "(Intercept)",
+            estimate: 11.3452,
+            std_error: 0.0921,
+            t_value: 123.18
+          }
+        - { term: training_load, estimate: -0.0002, std_error: 0.0004, t_value: -6.60 }
+        - { term: week, estimate: -0.0081, std_error: 0.0019, t_value: -4.26 }
+      info:
+        n_obs: 96
+        n_groups: 6
+        sigma: 0.4632
+        REML: true
+        converged: true
+        logLik: -71.34
+      plot: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2F\
+        svg%22%20width%3D%22440%22%20height%3D%22180%22%3E%3Crect%20width%3D%22\
+        440%22%20height%3D%22180%22%20fill%3D%22%2312151c%22%2F%3E%3Cline%20x1%\
+        3D%2240%22%20y1%3D%2295%22%20x2%3D%22420%22%20y2%3D%2295%22%20stroke%3D\
+        %22%238a94a6%22%20stroke-dasharray%3D%224%204%22%2F%3E%3Ccircle%20cx%3D\
+        %2270%22%20cy%3D%2296%22%20r%3D%224%22%20fill%3D%22%23c792ea%22%2F%3E%3\
+        Ccircle%20cx%3D%22105%22%20cy%3D%22128%22%20r%3D%224%22%20fill%3D%22%23\
+        c792ea%22%2F%3E%3Ccircle%20cx%3D%22140%22%20cy%3D%2284%22%20r%3D%224%22\
+        %20fill%3D%22%23c792ea%22%2F%3E%3Ccircle%20cx%3D%22175%22%20cy%3D%22118\
+        %22%20r%3D%224%22%20fill%3D%22%23c792ea%22%2F%3E%3Ccircle%20cx%3D%22210\
+        %22%20cy%3D%22104%22%20r%3D%224%22%20fill%3D%22%23c792ea%22%2F%3E%3Ccir\
+        cle%20cx%3D%22245%22%20cy%3D%22140%22%20r%3D%224%22%20fill%3D%22%23c792\
+        ea%22%2F%3E%3Ccircle%20cx%3D%22280%22%20cy%3D%2290%22%20r%3D%224%22%20f\
+        ill%3D%22%23c792ea%22%2F%3E%3Ccircle%20cx%3D%22315%22%20cy%3D%22112%22%\
+        20r%3D%224%22%20fill%3D%22%23c792ea%22%2F%3E%3Ccircle%20cx%3D%22350%22%\
+        20cy%3D%22128%22%20r%3D%224%22%20fill%3D%22%23c792ea%22%2F%3E%3Ccircle%\
+        20cx%3D%22385%22%20cy%3D%2280%22%20r%3D%224%22%20fill%3D%22%23c792ea%22\
+        %2F%3E%3Ccircle%20cx%3D%22120%22%20cy%3D%22150%22%20r%3D%224%22%20fill%\
+        3D%22%23c792ea%22%2F%3E%3Ccircle%20cx%3D%22300%22%20cy%3D%2272%22%20r%3\
+        D%224%22%20fill%3D%22%23c792ea%22%2F%3E%3C%2Fsvg%3E"
+
+  model_effects:
+    type: code
+    description: |-
+      # Same kernel as the cells above:
+      #  - `model` persists from the previous R cell
+      #  - `sprint_query` is the SQL result, now a real data frame
+      cat("Fastest squad mean (from SQL):",
+          round(min(sprint_query$mean_time), 2), "s\n")
+
+      fixed <- as.data.frame(coef(summary(model)))
+      fixed$term <- rownames(fixed)
+      fixed[, c("term", "Estimate", "Std. Error", "t value")]
+    options:
+      language: r
+      title: model-effects.R
+      uses: [sprint_query]
+      elapsed: 0.1s
+      output: |-
+        Fastest squad mean (from SQL): 10.84 s
+
+  # ── HeroUI component showcase ───────────────────────────────────────
+  ui_button:
+    type: button
+    options: { label: Add to plan, color: primary, variant: shadow }
+  ui_chip:
+    type: chip
+    options: { label: Elite, color: success, variant: flat }
+  ui_progress:
+    type: progress
+    options: { label: Season completion, value: 64, color: secondary }
+  ui_alert:
+    type: alert
+    options:
+      {
+        title: Recorded preview,
+        description: "Live data connectors arrive in Phase 5.",
+        color: warning,
+        variant: faded
+      }
+  ui_tabs:
+    type: tabs
+    options: { items: "Overview,Athletes,Sessions", variant: solid, color: primary }
+  ui_showcase:
+    type: card
+    children: [ ui_button, ui_chip, ui_progress, ui_alert, ui_tabs ]
+    options: { title: HeroUI components, columns: 2, gap: 16 }
+
+  # ── Chapter figures ─────────────────────────────────────────────────
+  sprint_distribution:
+    type: histogram
+    data:
+      ref: sprint_study
+    encoding:
+      x: sprint_time
+    transforms:
+      - filter: athlete_id
+    options:
+      bins: 39
+      color: "#00f2c6"
+      fillOpacity: 0.75
+      rx: 3
+      height: 210
+      span: 1
+      xTicks: 5
+      yTicks: 4
+      grid: rows
+
+  load_vs_time:
+    type: dots
+    data:
+      ref: sprint_study
+    encoding:
+      x: training_load
+      y: sprint_time
+      fill: athlete_id
+    transforms:
+      - filter: athlete_id
+    options:
+      radius: 5
+      opacity: 0.85
+
+  weekly_load:
+    type: bars
+    data:
+      ref: sprint_study
+    encoding:
+      x: athlete_id
+      y: training_load
+    options:
+      aggregate: mean
+      rx: 8
+      bandPadding: 0.35
+      color: "#7fd1b9"
+
+  load_trend:
+    type: area
+    data:
+      ref: sprint_study
+    encoding:
+      x: session_date
+      y: training_load
+    transforms:
+      - filter: athlete_id
+    options:
+      curve: monotoneX
+      gradient: true
+      fillOpacity: 0.55
+      strokeWidth: 2
+
+  method_note:
+    type: card
+    description: |-
+      Partial pooling shrinks each athlete's estimate toward the population
+      mean — extreme athletes are tempered by what the group implies, which
+      is exactly what a random intercept buys you.
+    options:
+      title: Why mixed models?
+      variant: glass
+      radius: lg
+      shadow: md
+
+  sprint_table:
+    type: table
+    data:
+      ref: sprint_study
+    transforms:
+      - filter: athlete_id
+    options:
+      limit: 8
+      density: compact
+      striped: true
+
+  # ── Dashboard 1 · dataset browser (composable card, synced on group) ─
+  sessions_mini:
+    type: histogram
+    data:
+      ref: sprint_study
+    encoding:
+      x: training_load
+    options:
+      title: Sessions Distribution
+      bins: 18
+      color: "#f83952"
+      height: 130
+      grid: none
+      yTicks: 2
+      fillOpacity: 0.7
+
+  group_donut:
+    type: donut
+    data:
+      ref: sprint_study
+    encoding:
+      x: group
+    options:
+      title: Group Distribution
+      height: 140
+
+  time_density:
+    type: density
+    data:
+      ref: sprint_study
+    encoding:
+      x: sprint_time
+    options:
+      title: Sprint Time (s)
+      color: "#8b9dff"
+      height: 130
+
+  athlete_summary:
+    type: summary_table
+    data:
+      ref: sprint_study
+    encoding:
+      x: athlete_id
+      y: sprint_time
+      fill: group
+    options:
+      title: Athletes
+      span: 3
+
+  dataset_browser:
+    type: card
+    encoding:
+      x: group
+    options:
+      title: Sprint Performance Dataset
+      columns: 3
+      gap: 18
+      padding: 24
+    children:
+      - sessions_mini
+      - group_donut
+      - time_density
+      - athlete_summary
+
+  # ── Dashboard 2 · model panel (grid of cards) ───────────────────────
+  model_spec:
+    type: card
+    description: |-
+      Random intercepts allow each athlete to have their own baseline
+      performance; training load and week enter as fixed effects.
+    options:
+      title: Model Specification
+      code: "sprint_time ~ training_load + week + (1 | athlete_id)"
+
+  model_structure:
+    type: diagram
+    data:
+      ref: sprint_study
+    encoding:
+      x: athlete_id
+    options:
+      title: Model Structure
+      maxGroups: 4
+      maxLeaves: 3
+      height: 230
+
+  results_table:
+    type: table
+    data:
+      ref: model_results
+    options:
+      limit: 6
+      striped: true
+
+  model_results_card:
+    type: card
+    children:
+      - results_table
+    options:
+      title: Model Results
+
+  residuals_plot:
+    type: dots
+    data:
+      ref: model_diagnostics
+    encoding:
+      x: fitted
+      y: residual
+    options:
+      title: Residuals vs Fitted
+      radius: 3
+      opacity: 0.7
+      color: "#c792ea"
+      refLine: zero
+      height: 200
+      xTicks: 4
+
+  qq_plot:
+    type: dots
+    data:
+      ref: model_diagnostics
+    encoding:
+      x: theoretical_q
+      y: sample_q
+    options:
+      title: QQ Plot
+      radius: 3
+      opacity: 0.7
+      color: "#8b9dff"
+      refLine: diagonal
+      height: 200
+      xTicks: 4
+
+  model_panel:
+    type: card
+    children:
+      - model_structure
+      - residuals_plot
+      - qq_plot
+    options:
+      title: Model Structure & Diagnostics
+      columns: 3
+      gap: 18
+
+datasets:
+  sprint_study:
+    source: csv
+    path: data/sprint_sessions.csv
+    description: 6 athletes, 16 weeks of sprint sessions
+  athlete_meta:
+    source: csv
+    path: data/athlete_meta.csv
+    description: Athlete name, country and squad (join target)
+  model_results:
+    source: csv
+    path: data/model_results.csv
+    description: Fixed-effect estimates for the mixed model
+  model_diagnostics:
+    source: csv
+    path: data/model_diagnostics.csv
+    description: Fitted values, residuals and QQ pairs
+
+interactions:
+  athlete_filter:
+    type: dropdown
+    label: Athlete
+    options: dynamic
+    field: athlete_id
+    variant: glass
+    radius: full
+    labelPlacement: left
+    placeholder: All athletes
+
+  load_cap:
+    type: slider
+    label: Max training load
+    field: training_load
+    mode: max
+    min: 320
+    max: 680
+    step: 10
+    variant: glass
+    radius: full
+    labelPlacement: left
+
+bindings:
+  - source: load_cap
+    target: load_vs_time
+    action: filter
+  - source: load_cap
+    target: load_trend
+    action: filter
+  - source: athlete_filter
+    target: sprint_distribution
+    action: filter
+  - source: athlete_filter
+    target: load_vs_time
+    action: filter
+  - source: athlete_filter
+    target: load_trend
+    action: filter
+  - source: athlete_filter
+    target: sprint_table
+    action: filter
+
+sync:
+  - from: athlete_filter
+    to: all_components
+    action: filter
+
+animations:
+  sprint_distribution:
+    entrance: scale-in
+    duration: 5000ms
+    delay: 400ms
+    easing: outExpo
+  load_vs_time:
+    entrance: fade
+    duration: 500ms
+    delay: 120ms
+    easing: outQuad
+  weekly_load:
+    entrance: slide-up
+    duration: 550ms
+    easing: outBack
+  load_trend:
+    entrance: rise
+    duration: 650ms
+    delay: 150ms
+    easing: outExpo
+  dataset_browser:
+    entrance: rise
+    duration: 600ms
+    easing: outExpo
+
+theme:
+  plot:
+    style: academic_dark
+  callout:
+    style: minimal_card

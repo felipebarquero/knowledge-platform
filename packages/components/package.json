@@ -1,0 +1,29 @@
+{
+  "name": "@knowledge/components",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@knowledge/data": "*",
+    "@knowledge/ir": "*",
+    "@knowledge/runtime": "*",
+    "@knowledge/sync": "*",
+    "zustand": "^5.0.0",
+    "@visx/axis": "^4.0.0",
+    "@visx/curve": "^4.0.0",
+    "@visx/gradient": "^4.0.0",
+    "@visx/grid": "^4.0.0",
+    "@visx/group": "^4.0.0",
+    "@visx/responsive": "^4.0.0",
+    "@visx/scale": "^4.0.0",
+    "@visx/shape": "^4.0.0",
+    "@visx/vendor": "^4.0.0",
+    "animejs": "^4.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  }
+}

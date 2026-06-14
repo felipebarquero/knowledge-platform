@@ -1,0 +1,12 @@
+{
+  "name": "@knowledge/query-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "kp-query-server": "./src/server.ts"
+  },
+  "dependencies": {
+    "@knowledge/data": "*"
+  }
+}

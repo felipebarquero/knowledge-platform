@@ -1,0 +1,4 @@
+effect,estimate,se,t_value,p_value
+(Intercept),11.31,0.094,120.3,<0.001
+training_load,0.00058,0.00012,4.83,<0.001
+week,-0.0081,0.0019,-4.26,<0.001

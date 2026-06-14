@@ -1,0 +1,49 @@
+# Publish loop: push to main → validate content → compile to IR → static site → GitHub Pages.
+#
+# Today (Phase 1) the platform and the sample content live in one repo, so this
+# builds directly. In the production two-repo model the *content repo* runs this
+# workflow instead: it checks out the platform repo alongside its own content
+# (actions/checkout with `repository:` + `path:`), points the build at its
+# content directory, and runs the same three steps — check, build, deploy.
+#
+# Hosting is not locked in: swap the deploy job for Vercel if preferred.
+name: publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:content
+      - run: npm run build --workspace=@knowledge/site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

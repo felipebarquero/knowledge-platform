@@ -1,0 +1,22 @@
+{
+  "name": "@knowledge/renderer-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles.css": "./src/styles.css"
+  },
+  "dependencies": {
+    "@knowledge/components": "*",
+    "@knowledge/data": "*",
+    "@knowledge/ir": "*",
+    "katex": "^0.16.21"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.7"
+  }
+}
