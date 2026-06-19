@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { compile } from "@knowledge/compiler";
-import { CsvContext, DocSyncProvider } from "@knowledge/components";
+import { CellSessionContext, CsvContext, DocSyncProvider } from "@knowledge/components";
+import type { CellSession, NotebookCellData } from "@knowledge/components";
 import { buildCsvMap, buildDataMap } from "@knowledge/data";
 import type { DataTable } from "@knowledge/data";
 import type { IRDocument, IRNode } from "@knowledge/ir";
-import { DocumentView, NodeView } from "@knowledge/renderer-web";
+import { DocumentView, NodeView, irToMarkdownDoc, irToNotebook } from "@knowledge/renderer-web";
+import type { NotebookOverrides } from "@knowledge/renderer-web";
 import documentSource from "../../../content/document.md?raw";
 import definitionsSource from "../../../content/definitions.yaml?raw";
+import { AuthProvider, useAuth } from "./auth";
+import { LoginPage } from "./LoginPage";
+import { TopBar } from "./TopBar";
+import type { AppNotification } from "./TopBar";
 
 /**
  * Phase 4 multi-renderer: the reader is five stateless projections of the
@@ -65,7 +71,34 @@ function paginate(doc: IRDocument, maxLevel: number, maxBlocks: number): Page[] 
   return pages;
 }
 
+/** Trigger a client-side download of generated text (notebook / markdown). */
+function downloadBlob(filename: string, content: string, mime: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export default function App() {
+  return (
+    <AuthProvider>
+      <Gate />
+    </AuthProvider>
+  );
+}
+
+/** Auth gate: hold render until the session is read, then login or reader. */
+function Gate() {
+  const { user, ready } = useAuth();
+  if (!ready) return null;
+  return user ? <Reader /> : <LoginPage />;
+}
+
+function Reader() {
   const [mode, setMode] = useState<ViewMode>(modeFromHash);
 
   useEffect(() => {
@@ -88,6 +121,48 @@ export default function App() {
     [result.document],
   );
 
+  // Notebook-export registry: each editable cell publishes its current source +
+  // last output here (mutating a ref, no re-render); the export reads it.
+  const registry = useRef<Map<string, NotebookCellData>>(new Map());
+  const register = useCallback((cellId: string, data: NotebookCellData) => {
+    registry.current.set(cellId, data);
+  }, []);
+  // Cells are editable in the interactive reading modes, read-only in paper/slides.
+  const editable = mode === "read" || mode === "course" || mode === "dashboard";
+  const session = useMemo<CellSession>(
+    () => ({ scope: result.document?.id ?? "default", editable, register }),
+    [result.document, editable, register],
+  );
+
+  // Course-derived notifications: unfinished lessons → homework + a study tip.
+  const notifications = useMemo<AppNotification[]>(() => {
+    const d = result.document;
+    if (!d) return [];
+    const lessons = paginate(d, 2, 0);
+    let done: string[] = [];
+    try {
+      done = JSON.parse(localStorage.getItem(DONE_KEY) ?? "[]") as string[];
+    } catch {
+      /* ignore corrupt progress */
+    }
+    const items: AppNotification[] = lessons
+      .filter((l) => !done.includes(l.title))
+      .slice(0, 4)
+      .map((l, i): AppNotification => ({
+        id: `hw-${i}`,
+        kind: "homework",
+        title: `Homework: ${l.title}`,
+        detail: "Open this lesson in course mode to complete it.",
+      }));
+    items.push({
+      id: "study-1",
+      kind: "study",
+      title: "New study available",
+      detail: "Mixed-effects models — recommended next.",
+    });
+    return items;
+  }, [result.document]);
+
   useEffect(() => {
     if (result.document?.title) document.title = result.document.title;
   }, [result.document]);
@@ -101,20 +176,48 @@ export default function App() {
   }
   const doc = result.document;
 
+  const overrides = (): NotebookOverrides => Object.fromEntries(registry.current);
+  const exportNotebook = () =>
+    downloadBlob(`${doc.id}.ipynb`, JSON.stringify(irToNotebook(doc, overrides()), null, 1), "application/json");
+  const exportMarkdown = () =>
+    downloadBlob(`${doc.id}.md`, irToMarkdownDoc(doc, overrides()), "text/markdown;charset=utf-8");
+
   return (
     <CsvContext.Provider value={csvMap}>
-      <nav className="reader-switcher" aria-label="View mode">
-        {MODES.map((m) => (
-          <a key={m.id} href={`#${m.id}`} className={mode === m.id ? "active" : ""}>
-            {m.label}
-          </a>
-        ))}
-      </nav>
-      {mode === "read" && <ReadView doc={doc} data={data} csvMap={csvMap} />}
-      {mode === "slides" && <SlidesView doc={doc} data={data} csvMap={csvMap} />}
-      {mode === "course" && <CourseView doc={doc} data={data} csvMap={csvMap} />}
-      {mode === "dashboard" && <DashboardView doc={doc} data={data} csvMap={csvMap} />}
-      {mode === "paper" && <PaperView doc={doc} data={data} csvMap={csvMap} />}
+      <CellSessionContext.Provider value={session}>
+        <nav className="reader-switcher" aria-label="View mode">
+          {MODES.map((m) => (
+            <a key={m.id} href={`#${m.id}`} className={mode === m.id ? "active" : ""}>
+              {m.label}
+            </a>
+          ))}
+        </nav>
+        <TopBar notifications={notifications} />
+        {mode === "read" && <ReadView doc={doc} data={data} csvMap={csvMap} />}
+        {mode === "slides" && <SlidesView doc={doc} data={data} csvMap={csvMap} />}
+        {mode === "course" && <CourseView doc={doc} data={data} csvMap={csvMap} />}
+        {mode === "dashboard" && <DashboardView doc={doc} data={data} csvMap={csvMap} />}
+        {mode === "paper" && <PaperView doc={doc} data={data} csvMap={csvMap} />}
+        <div className="reader-exportbar" aria-label="Download this document">
+          <span className="reader-exportbar__label">Keep your work</span>
+          <button
+            type="button"
+            className="reader-export"
+            onClick={exportNotebook}
+            title="Download a Jupyter notebook (.ipynb) — code + latest results; datasets stay in the app"
+          >
+            ⬇ .ipynb
+          </button>
+          <button
+            type="button"
+            className="reader-export"
+            onClick={exportMarkdown}
+            title="Download a Markdown copy — prose + code + results"
+          >
+            ⬇ .md
+          </button>
+        </div>
+      </CellSessionContext.Provider>
     </CsvContext.Provider>
   );
 }

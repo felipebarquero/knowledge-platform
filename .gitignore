@@ -5,3 +5,7 @@ dist/
 .DS_Store
 .claude/
 *.log
+.vercel
+.env
+.env.*
+!.env.example

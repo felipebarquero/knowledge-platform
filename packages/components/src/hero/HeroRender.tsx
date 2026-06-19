@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Icon } from "../Icon";
 
 /**
  * Presentational renderers for the HeroUI component family. Styling is
@@ -70,7 +71,8 @@ export function HeroRender({ type, o }: { type: string; o: Opts }): ReactNode {
           {...data(o)}
         >
           {b(o, "isLoading") && <span className="hui-spinner hui-spinner--inline" aria-hidden="true" />}
-          {b(o, "isIconOnly") ? "★" : s(o, "label", "Button")}
+          {s(o, "icon") && !b(o, "isLoading") && <Icon icon={s(o, "icon")} size="1.05em" />}
+          {b(o, "isIconOnly") ? (s(o, "icon") ? null : "★") : s(o, "label", "Button")}
         </button>
       );
 
@@ -91,6 +93,7 @@ export function HeroRender({ type, o }: { type: string; o: Opts }): ReactNode {
       return (
         <span className="hui hui-chip" {...data(o)}>
           {s(o, "variant") === "dot" && <i className="hui-chip__dot" />}
+          {s(o, "icon") && <Icon icon={s(o, "icon")} size="0.95em" />}
           {s(o, "label", "Chip")}
           {b(o, "isCloseable") && <button type="button" className="hui-chip__close" aria-label="close">×</button>}
         </span>

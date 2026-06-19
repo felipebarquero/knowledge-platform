@@ -42,6 +42,8 @@ class Kernel {
   private tables = new Map<string, Table>();
   private waiters = new Map<string, (() => void)[]>();
   private queue: Promise<unknown> = Promise.resolve();
+  /** True once the persistent R session has been touched in this scope. */
+  rStarted = false;
 
   /** Publish (or update) a named table; resolves anything waiting on it. */
   provideTable(name: string, rows: Rows): void {
@@ -89,6 +91,7 @@ class Kernel {
   private async execute(code: string, options: KernelRunOptions): Promise<RRunResult> {
     const { packages = [], datasets = {}, uses = [], capturePlot = true } = options;
     const started = performance.now();
+    this.rStarted = true;
     try {
       for (const name of uses) await this.waitFor(name);
       const webR = await getWebR();
@@ -128,5 +131,42 @@ class Kernel {
   }
 }
 
-/** The process-wide kernel singleton (one R session per page). */
-export const kernel = new Kernel();
+/**
+ * One kernel per **scope** (a document / chapter / article id). SQL↔R dataframe
+ * sharing is bounded to a scope, so two documents never collide in the same R
+ * session. NOTE: WebR itself is a single WASM instance per page, but the R
+ * global env is cleared between scopes via {@link Kernel.reset} when needed;
+ * within a scope the persistent-session semantics hold.
+ */
+const kernels = new Map<string, Kernel>();
+
+/** Get (or lazily create) the kernel for a scope. Default scope = "default". */
+export function getKernel(scope = "default"): Kernel {
+  let k = kernels.get(scope);
+  if (!k) {
+    k = new Kernel();
+    kernels.set(scope, k);
+  }
+  return k;
+}
+
+/** The default-scope kernel (back-compat for callers that don't scope). */
+export const kernel = getKernel("default");
+
+export interface KernelScopeInfo {
+  /** Scope id (the document / chapter / article the kernel is bound to). */
+  scope: string;
+  /** Shared tables (SQL results materialised as R data frames) in this scope. */
+  tables: string[];
+  /** Whether the persistent R (WebR) session has been started in this scope. */
+  rStarted: boolean;
+}
+
+/** Snapshot of every live kernel scope — drives the reader's Kernels panel. */
+export function kernelScopes(): KernelScopeInfo[] {
+  return [...kernels.entries()].map(([scope, k]) => ({
+    scope,
+    tables: k.tableNames(),
+    rStarted: k.rStarted,
+  }));
+}

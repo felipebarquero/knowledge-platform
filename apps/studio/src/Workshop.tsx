@@ -3,22 +3,31 @@ import { parseDocument } from "yaml";
 import { compile } from "@knowledge/compiler";
 import {
   CONTROL_STYLE_SPECS,
+  CellSessionContext,
   ComponentRenderer,
   DocSyncProvider,
   EASINGS,
   ENTRANCES,
   HERO_COMPONENTS,
+  Icon,
   LiveControl,
   controlStyleValue,
+  highlightLine,
   optionValue,
   parseDuration,
   specsFor,
 } from "@knowledge/components";
-import type { OptionSpec } from "@knowledge/components";
+import type { CellSession, OptionSpec } from "@knowledge/components";
 import { applyFilters, columnsOf, filterFieldsOf, uniqueValues } from "@knowledge/data";
 import type { DataTable } from "@knowledge/data";
 import { ALL_COMPONENTS } from "@knowledge/ir";
 import type { AnimationDef, Binding, ComponentDef, ControlDef, IRDocument, SyncRule } from "@knowledge/ir";
+import { ESSENTIAL_OPTIONS, SIMPLE_FALLBACK_COUNT, friendlyLabel } from "./friendly";
+import { IconPicker } from "./IconPicker";
+import { presetsFor } from "./style-presets";
+import type { StylePreset } from "./style-presets";
+
+type InspectorMode = "simple" | "advanced";
 
 /**
  * Component workshop (editor mode) — Storybook-style UX over the semantic
@@ -64,6 +73,25 @@ const IMPLEMENTED_TYPES = [...NATIVE_TYPES, ...Object.keys(HERO_COMPONENTS)];
 const ACTIONS = ["filter", "update", "highlight"] as const;
 const NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 
+/** Flow node/edge shapes (authored in a flow component's options). */
+interface WsFlowNode {
+  id: string;
+  label?: string;
+  sublabel?: string;
+  icon?: string;
+  x?: number;
+  y?: number;
+  color?: string;
+  children?: string[];
+}
+interface WsFlowEdge {
+  id?: string;
+  source: string;
+  target: string;
+  label?: string;
+  animated?: boolean;
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
 }
@@ -99,6 +127,11 @@ const TYPE_CATALOG: KindEntry[] = [
   { kind: "dots", label: "dots", group: "Charts", description: "Scatter of two numeric columns; color + reference lines" },
   { kind: "donut", label: "donut", group: "Charts", description: "Share of categories with legend and percentages" },
   { kind: "density", label: "density", group: "Charts", description: "Smoothed distribution curve" },
+  { kind: "violin", label: "violin", group: "Charts", description: "Split violin + box — value distribution by group (mixed-effects)" },
+  { kind: "box", label: "box plot", group: "Charts", description: "Box-and-whisker: quartiles, whiskers, mean, outliers" },
+  { kind: "threshold", label: "difference area", group: "Charts", description: "Two series compared — fill above/below where one exceeds the other" },
+  { kind: "bands", label: "bands", group: "Charts", description: "Glowing mean profiles per group with confidence bands, legend + crosshair" },
+  { kind: "panels", label: "panels", group: "Charts", description: "Faceted small-multiples: paired glow profiles, inset difference box plots, synced crosshair + pan/zoom toolbar" },
   { kind: "sparkline", label: "sparkline", group: "Charts", description: "Tiny inline trend line" },
   { kind: "chart", label: "chart", group: "Charts", description: "Line chart over x/y" },
   { kind: "table", label: "datatable", group: "Data", description: "Raw rows as a data table" },
@@ -106,6 +139,7 @@ const TYPE_CATALOG: KindEntry[] = [
   { kind: "sql", label: "SQL console", group: "Data", description: "Runnable SQL over the datasets with a results table" },
   { kind: "summary_table", label: "summary table", group: "Data", description: "Per-group stats: mean, n, best, improvement, trend" },
   { kind: "diagram", label: "diagram", group: "Data", description: "Hierarchy: population → groups → observations" },
+  { kind: "flow", label: "flow", group: "Diagrams", description: "Node-and-edge graph (React Flow) — drag, connect, style" },
   { kind: "control:dropdown", label: "selector", group: "Controls", description: "Dropdown — pick a value to filter bound components" },
   { kind: "control:slider", label: "slider", group: "Controls", description: "Numeric range control (reactive in Phase 3)" },
   { kind: "control:toggle", label: "toggle", group: "Controls", description: "Boolean switch (reactive in Phase 3)" },
@@ -120,6 +154,97 @@ const TYPE_CATALOG: KindEntry[] = [
 
 function prettyTitle(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function pascal(type: string): string {
+  return type.split("_").map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join("");
+}
+
+/** Figma-layers-style icon for a component/control type (Iconify lucide name). */
+function typeIconName(type: string): string {
+  switch (type) {
+    case "card":
+    case "callout":
+      return "lucide:frame";
+    case "flow":
+      return "lucide:workflow";
+    case "diagram":
+      return "lucide:share-2";
+    case "table":
+    case "summary_table":
+      return "lucide:table-2";
+    case "sql":
+      return "lucide:database";
+    case "code":
+      return "lucide:code";
+    case "equation":
+      return "lucide:sigma";
+    case "histogram":
+    case "bars":
+      return "lucide:bar-chart-3";
+    case "area":
+    case "chart":
+      return "lucide:line-chart";
+    case "density":
+      return "lucide:area-chart";
+    case "sparkline":
+      return "lucide:activity";
+    case "dots":
+    case "plot":
+      return "lucide:scatter-chart";
+    case "donut":
+      return "lucide:pie-chart";
+    case "violin":
+      return "lucide:chart-spline";
+    case "box":
+      return "lucide:candlestick-chart";
+    case "threshold":
+      return "lucide:chart-area";
+    case "bands":
+      return "lucide:chart-line";
+    case "panels":
+      return "lucide:layout-grid";
+    case "dropdown":
+      return "lucide:square-chevron-down";
+    case "slider":
+      return "lucide:sliders-horizontal";
+    case "toggle":
+      return "lucide:toggle-left";
+    case "new":
+      return "lucide:plus";
+    default:
+      return HERO_COMPONENTS[type] ? "lucide:component" : "lucide:box";
+  }
+}
+
+/** HeroUI instances get the purple "component" tone (like a Figma component). */
+function isComponentTone(type: string): boolean {
+  return Boolean(HERO_COMPONENTS[type]);
+}
+
+/**
+ * Render a component def as a readable JSX-like snippet for the workshop's
+ * Selection → code panel (Lunagraph-style). Data/encoding/options become props;
+ * arrays (flow nodes/edges) collapse to a count; a description becomes children.
+ */
+function defToJsx(name: string, def: ComponentDef): string {
+  const tag = pascal(def.type);
+  const props: string[] = [];
+  if (def.data?.ref) props.push(`data="${def.data.ref}"`);
+  for (const [channel, field] of Object.entries(def.encoding ?? {})) props.push(`${channel}="${field}"`);
+  for (const [key, value] of Object.entries(def.options ?? {})) {
+    if (Array.isArray(value)) props.push(`${key}={[${value.length}]}`);
+    else if (typeof value === "string") props.push(`${key}="${value}"`);
+    else if (typeof value === "boolean") props.push(value ? key : `${key}={false}`);
+    else if (typeof value === "number") props.push(`${key}={${value}}`);
+  }
+  if (def.children?.length) props.push(`children={[${def.children.map((c) => `"${c}"`).join(", ")}]}`);
+  const propStr = props.length === 0 ? "" : props.length <= 2 ? ` ${props.join(" ")}` : `\n  ${props.join("\n  ")}\n`;
+  if (def.description) {
+    const body = def.description.length > 90 ? `${def.description.slice(0, 90)}…` : def.description;
+    return `<${tag}${propStr}>\n  {${JSON.stringify(body)}}\n</${tag}>`;
+  }
+  return `<${tag}${propStr}${props.length > 2 ? "" : " "}/>`;
 }
 
 function classifyColumns(rows: DataTable | undefined): {
@@ -174,6 +299,30 @@ function seedComponent(
       return { type, ...dataRef, ...enc({ x: categorical[0], y: numeric[0] }), options: { aggregate: "mean" } };
     case "summary_table":
       return { type, ...dataRef, ...enc({ x: categorical[0], y: numeric[0], fill: categorical[1] }) };
+    case "violin":
+      return { type, ...dataRef, ...enc({ x: categorical[0], y: numeric[0], fill: categorical[1] }), options: { split: true } };
+    case "box":
+      return { type, ...dataRef, ...enc({ x: categorical[0], y: numeric[0], fill: categorical[1] }) };
+    case "threshold": {
+      const xField = temporal[0] ?? numeric[0];
+      const series = numeric.filter((numericField) => numericField !== xField);
+      return { type, ...dataRef, ...enc({ x: xField, y: series[0] ?? numeric[0], y2: series[1] ?? series[0] }) };
+    }
+    case "bands": {
+      const xField = temporal[0] ?? numeric[0];
+      const yField = numeric.find((numericField) => numericField !== xField) ?? numeric[0];
+      return { type, ...dataRef, ...enc({ x: xField, y: yField, fill: categorical[0] }) };
+    }
+    case "panels": {
+      const xField = temporal[0] ?? numeric[0];
+      const yField = numeric.find((numericField) => numericField !== xField) ?? numeric[0];
+      return {
+        type,
+        ...dataRef,
+        ...enc({ x: xField, y: yField, fill: categorical[0], facet: categorical[1] ?? categorical[0] }),
+        options: { columns: 2 },
+      };
+    }
     case "donut":
     case "diagram":
       return { type, ...dataRef, ...enc({ x: categorical[0] }) };
@@ -205,6 +354,21 @@ function seedComponent(
     case "dots":
     case "plot":
       return { type, ...dataRef, ...enc({ x: numeric[0], y: numeric[1] ?? numeric[0] }) };
+    case "flow":
+      return {
+        type,
+        options: {
+          nodes: [
+            { id: "input", label: "Input", x: 0, y: 60, color: "#7c9aff" },
+            { id: "process", label: "Process", x: 220, y: 60, color: "#c792ea" },
+            { id: "output", label: "Output", x: 440, y: 60, color: "#58c896" },
+          ],
+          edges: [
+            { source: "input", target: "process", animated: true },
+            { source: "process", target: "output", animated: true },
+          ],
+        },
+      };
     default:
       return { type, ...dataRef };
   }
@@ -215,8 +379,10 @@ function makeDraft(
   name: string,
   data: Record<string, DataTable>,
   seedType: ComponentDef["type"] = "plot",
+  localDefs: Record<string, ComponentDef> = {},
 ): Draft {
-  const existing = doc.components[name];
+  // New, unsaved components live in localDefs until written back to YAML.
+  const existing = doc.components[name] ?? localDefs[name];
   const shared = {
     bindings: structuredClone(doc.bindings),
     sync: structuredClone(doc.sync),
@@ -255,20 +421,33 @@ function buildTree(components: Record<string, ComponentDef>, extra: string[]): T
   return roots.map((name) => build(name, name, new Set([name])));
 }
 
-function buildYamlText(source: string, name: string, draft: Draft, controlsTouched: boolean): string {
+function serializeComponent(def: ComponentDef): Record<string, unknown> {
+  return clean({
+    type: def.type,
+    data: def.data,
+    encoding: def.encoding,
+    transforms: def.transforms,
+    options: def.options,
+    description: def.description,
+    children: def.children,
+  });
+}
+
+function buildYamlText(
+  source: string,
+  name: string,
+  draft: Draft,
+  controlsTouched: boolean,
+  localDefs: Record<string, ComponentDef> = {},
+): string {
   const ydoc = parseDocument(source);
-  ydoc.setIn(
-    ["components", name],
-    clean({
-      type: draft.component.type,
-      data: draft.component.data,
-      encoding: draft.component.encoding,
-      transforms: draft.component.transforms,
-      options: draft.component.options,
-      description: draft.component.description,
-      children: draft.component.children,
-    }),
-  );
+  // Persist any new components dropped into a card (children of the draft),
+  // then write the selected component last so its draft edits win.
+  for (const [childName, childDef] of Object.entries(localDefs)) {
+    if (childName === name) continue;
+    ydoc.setIn(["components", childName], serializeComponent(childDef));
+  }
+  ydoc.setIn(["components", name], serializeComponent(draft.component));
   if (draft.animation && draft.animation.entrance && draft.animation.entrance !== "none") {
     ydoc.setIn(["animations", name], clean({ ...draft.animation }));
   } else if (ydoc.hasIn(["animations", name])) {
@@ -323,6 +502,20 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
   /** Canvas mode for embedded components: edit alone or live inside the parent card. */
   const [viewMode, setViewMode] = useState<"context" | "solo">("context");
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
+  // New components created/dropped but not yet saved to YAML (e.g. card children).
+  const [localDefs, setLocalDefs] = useState<Record<string, ComponentDef>>({});
+  // Inspector mode: Simple (friendly essentials) vs Advanced (full prop surface).
+  const [inspectorMode, setInspectorMode] = useState<InspectorMode>(() =>
+    sessionStorage.getItem("kp.workshop.inspectorMode") === "advanced" ? "advanced" : "simple",
+  );
+  // Compose palette + drag-to-reorder state for card children.
+  const [paletteTab, setPaletteTab] = useState<"existing" | "new">("existing");
+  const [dragChild, setDragChild] = useState<number | null>(null);
+  const [overChild, setOverChild] = useState<number | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  // Lunagraph-style Selection → code panel under the canvas.
+  const [codePanelOpen, setCodePanelOpen] = useState(true);
+  const [snippetCopied, setSnippetCopied] = useState(false);
 
   // Controls are first-class: edited on their own (not buried in a component).
   const savedControls = Object.keys(doc.interactions);
@@ -337,16 +530,26 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
     if (selected) sessionStorage.setItem("kp.workshop.selected", selected);
   }, [selected]);
 
+  useEffect(() => {
+    sessionStorage.setItem("kp.workshop.inspectorMode", inspectorMode);
+  }, [inspectorMode]);
+
   function select(name: string) {
     if (dirty && !window.confirm("Discard unsaved changes?")) return;
     setSelected(name);
-    setDraft(makeDraft(doc, name, data));
+    setDraft(makeDraft(doc, name, data, "plot", localDefs));
     setDirty(false);
     setPreviewFilters({});
     setSaveError(null);
     setControlsTouched(false);
     setViewMode("context");
     setEditing("component");
+  }
+
+  /** Canvas click-to-select: ignore re-clicking the already-active component. */
+  function pick(name: string) {
+    if (editing === "component" && name === selected) return;
+    select(name);
   }
 
   /** Select a control for standalone editing (canvas preview + inspector). */
@@ -398,13 +601,99 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
       setCreating(false);
       return null;
     }
+    const seeded = seedComponent(kind as ComponentDef["type"], doc, data, name);
+    const nextLocal = { ...localDefs, [name]: seeded };
+    setLocalDefs(nextLocal);
     setNewNames((names) => [...names, name]);
     setSelected(name);
-    setDraft(makeDraft(doc, name, data, kind as ComponentDef["type"]));
+    setDraft(makeDraft(doc, name, data, kind as ComponentDef["type"], nextLocal));
     setDirty(true);
     setPreviewFilters({});
     setCreating(false);
+    setEditing("component");
     return null;
+  }
+
+  /**
+   * Quick-compose: create a new component of `kind` and append it as a child of
+   * the selected card (Builder.io-style drop → element appears immediately).
+   * Auto-names to avoid a modal; the user edits/styles it via the inspector.
+   */
+  function addChildOfKind(kind: string) {
+    const taken = new Set([
+      ...allNames,
+      ...Object.keys(localDefs),
+      ...savedControls,
+      ...newControls,
+    ]);
+    let name = kind;
+    for (let i = 2; taken.has(name); i++) name = `${kind}_${i}`;
+    const seeded = seedComponent(kind as ComponentDef["type"], doc, data, name);
+    setLocalDefs((d) => ({ ...d, [name]: seeded }));
+    setNewNames((names) => [...names, name]);
+    patch((d) => ({
+      ...d,
+      component: {
+        ...d.component,
+        children: [...(d.component.children ?? []), name],
+      },
+    }));
+  }
+
+  /** Quick-compose: append an existing component as a child of the selected card. */
+  function addChildExisting(name: string) {
+    patch((d) =>
+      (d.component.children ?? []).includes(name)
+        ? d
+        : {
+            ...d,
+            component: {
+              ...d.component,
+              children: [...(d.component.children ?? []), name],
+            },
+          },
+    );
+  }
+
+  /** Reorder the selected card's children (drag-and-drop). */
+  function moveChild(from: number, to: number) {
+    patch((d) => {
+      const children = [...(d.component.children ?? [])];
+      if (from < 0 || from >= children.length || to < 0 || to >= children.length) return d;
+      const [moved] = children.splice(from, 1);
+      children.splice(to, 0, moved!);
+      return { ...d, component: { ...d.component, children } };
+    });
+  }
+
+  /** Remove a child from the selected card (does not delete the component). */
+  function removeChild(name: string) {
+    patch((d) => {
+      const children = (d.component.children ?? []).filter((c) => c !== name);
+      return {
+        ...d,
+        component: { ...d.component, children: children.length ? children : undefined },
+      };
+    });
+  }
+
+  /** Persist dragged flow node positions (x/y) back into the def → saved to YAML. */
+  function persistFlowNodes(name: string, dragged: WsFlowNode[]) {
+    const byId = new Map(dragged.map((n) => [n.id, n]));
+    const merge = (def: ComponentDef): ComponentDef => {
+      const existing = (def.options?.nodes as WsFlowNode[] | undefined) ?? [];
+      const nodes = existing.map((n) => {
+        const u = byId.get(n.id);
+        return u ? { ...n, x: u.x, y: u.y } : n;
+      });
+      return { ...def, options: { ...(def.options ?? {}), nodes } };
+    };
+    if (name === selected) {
+      patch((d) => ({ ...d, component: merge(d.component) }));
+    } else if (localDefs[name]) {
+      setLocalDefs((defs) => ({ ...defs, [name]: merge(defs[name]!) }));
+      setDirty(true);
+    }
   }
 
   const toggleSection = (id: string) => setCollapsed((c) => ({ ...c, [id]: !c[id] }));
@@ -424,6 +713,13 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
       else options[key] = value;
       return { ...d, component: { ...d.component, options } };
     });
+
+  /** Apply a named style preset — a bundle of option values, still tweakable. */
+  const applyPreset = (preset: StylePreset) =>
+    patch((d) => ({
+      ...d,
+      component: { ...d.component, options: { ...(d.component.options ?? {}), ...preset.options } },
+    }));
 
   const setEncoding = (channel: string, field: string) =>
     patch((d) => {
@@ -446,12 +742,27 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
     });
   };
 
+  // Canvas cells are editable; inline-editing the SELECTED code/sql cell writes
+  // back to its draft (persisted on Save), like the inspector's code field.
+  // Other cells edit ephemerally. Kernel scope = the document id.
+  const cellSession = useMemo<CellSession>(
+    () => ({
+      scope: doc.id,
+      editable: true,
+      onSourceChange: (cellId, src) => {
+        if (cellId === selected) patchComponent({ description: src || undefined });
+      },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.id, selected],
+  );
+
   const yamlText = useMemo(
     () =>
       draft && selected
-        ? buildYamlText(definitionsSource, selected, draft, controlsTouched)
+        ? buildYamlText(definitionsSource, selected, draft, controlsTouched, localDefs)
         : definitionsSource,
-    [definitionsSource, selected, draft, controlsTouched],
+    [definitionsSource, selected, draft, controlsTouched, localDefs],
   );
 
   const check = useMemo(
@@ -622,17 +933,20 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
               </button>
             </div>
           )}
-          {parents.map((parent) => (
-            <button
-              key={parent}
-              type="button"
-              className="ws-crumb"
-              title={`edit ${parent}`}
-              onClick={() => select(parent)}
-            >
-              ⤴ {parent}
-            </button>
-          ))}
+          {contextParent && (
+            <nav className="ws-path" aria-label="selection path">
+              <button
+                type="button"
+                className="ws-path__crumb"
+                title={`edit ${contextParent}`}
+                onClick={() => select(contextParent)}
+              >
+                {contextParent}
+              </button>
+              <span className="ws-path__sep">›</span>
+              <span className="ws-path__crumb ws-path__crumb--current">{selected}</span>
+            </nav>
+          )}
           {inContext ? (
             <span className="workshop__canvas-hint">live card sync — hover &amp; click the children</span>
           ) : filterFields.length > 0 && rows ? (
@@ -674,28 +988,77 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
           </button>
         </div>
         <div className="workshop__stage">
-          {inContext && contextParent ? (
-            <ComponentRenderer
-              name={contextParent}
-              def={doc.components[contextParent]!}
-              replayKey={replayKey}
-              registry={{ ...doc.components, [selected]: draft.component }}
-              dataMap={data}
-              csvMap={csvMap}
-              visited={[contextParent]}
-            />
-          ) : (
-            <ComponentRenderer
-              name={selected}
-              def={draft.component}
-              rows={filtered}
-              animation={draft.animation ?? undefined}
-              replayKey={replayKey}
-              registry={{ ...doc.components, [selected]: draft.component }}
-              dataMap={data}
-              csvMap={csvMap}
-              visited={[selected]}
-            />
+          <CellSessionContext.Provider value={cellSession}>
+            {inContext && contextParent ? (
+              <ComponentRenderer
+                name={contextParent}
+                def={doc.components[contextParent]!}
+                replayKey={replayKey}
+                registry={{ ...doc.components, ...localDefs, [selected]: draft.component }}
+                dataMap={data}
+                csvMap={csvMap}
+                visited={[contextParent]}
+                selectable
+                activeName={selected}
+                onPick={pick}
+                onFlowNodes={persistFlowNodes}
+              />
+            ) : (
+              <ComponentRenderer
+                name={selected}
+                def={draft.component}
+                rows={filtered}
+                animation={draft.animation ?? undefined}
+                replayKey={replayKey}
+                registry={{ ...doc.components, ...localDefs, [selected]: draft.component }}
+                dataMap={data}
+                csvMap={csvMap}
+                visited={[selected]}
+                selectable
+                activeName={selected}
+                onPick={pick}
+                onFlowNodes={persistFlowNodes}
+              />
+            )}
+          </CellSessionContext.Provider>
+        </div>
+
+        <div className={`ws-codepanel ${codePanelOpen ? "" : "ws-codepanel--collapsed"}`}>
+          <div className="ws-codepanel__bar">
+            <button
+              type="button"
+              className="ws-codepanel__toggle"
+              onClick={() => setCodePanelOpen((o) => !o)}
+              aria-expanded={codePanelOpen}
+            >
+              {codePanelOpen ? "▾" : "▸"} Selection
+            </button>
+            <code className="ws-codepanel__name">{selected}</code>
+            <button
+              type="button"
+              className="ws-codepanel__copy"
+              onClick={() => {
+                void navigator.clipboard?.writeText(defToJsx(selected, draft.component)).then(() => {
+                  setSnippetCopied(true);
+                  window.setTimeout(() => setSnippetCopied(false), 1400);
+                });
+              }}
+            >
+              {snippetCopied ? "copied ✓" : "Copy"}
+            </button>
+          </div>
+          {codePanelOpen && (
+            <pre className="ws-codepanel__code">
+              <code>
+                {defToJsx(selected, draft.component)
+                  .split("\n")
+                  .map((line, i) => (
+                    <span key={i} className="kp-code__line">
+                      <span className="kp-code__content">{highlightLine(line, "typescript")}</span>
+                    </span>
+                  ))}
+              </code>
+            </pre>
           )}
         </div>
       </section>
@@ -706,9 +1069,37 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
           <span className="ws-item__type">{draft.component.type}</span>
         </header>
 
+        <div className="ws-mode">
+          <div className="ws-seg">
+            <button
+              type="button"
+              className={`ws-seg__btn ${inspectorMode === "simple" ? "ws-seg__btn--active" : ""}`}
+              onClick={() => setInspectorMode("simple")}
+            >
+              Simple
+            </button>
+            <button
+              type="button"
+              className={`ws-seg__btn ${inspectorMode === "advanced" ? "ws-seg__btn--active" : ""}`}
+              onClick={() => setInspectorMode("advanced")}
+            >
+              Advanced
+            </button>
+          </div>
+        </div>
+
         <div className="workshop__panel-body ws-inspector">
-          <Section id="data" title="Data" collapsed={collapsed} onToggle={toggleSection}>
-              <Field label="dataset">
+          <Section id="data" title={draft.component.type === "flow" ? "Flow" : "Data"} collapsed={collapsed} onToggle={toggleSection}>
+              {draft.component.type === "flow" ? (
+                <FlowEditor
+                  nodes={(draft.component.options?.nodes as WsFlowNode[] | undefined) ?? []}
+                  edges={(draft.component.options?.edges as WsFlowEdge[] | undefined) ?? []}
+                  onNodes={(nodes) => setOption("nodes", nodes.length ? nodes : undefined)}
+                  onEdges={(edges) => setOption("edges", edges.length ? edges : undefined)}
+                />
+              ) : (
+              <>
+              <Field label={inspectorMode === "simple" ? "Data source" : "dataset"}>
                 <select
                   value={draft.component.data?.ref ?? ""}
                   onChange={(e) =>
@@ -726,57 +1117,35 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
               {draft.component.type === "card" && (
                 <>
                   <h4 className="ws-group">Composition</h4>
-                  <Field label="children">
-                    <div className="ws-checklist">
-                      {savedNames
-                        .filter((n) => n !== selected)
-                        .map((n) => (
-                          <label key={n} className="ws-check">
-                            <input
-                              type="checkbox"
-                              checked={draft.component.children?.includes(n) ?? false}
-                              onChange={() =>
-                                patch((d) => {
-                                  const current = d.component.children ?? [];
-                                  const next = current.includes(n)
-                                    ? current.filter((c) => c !== n)
-                                    : [...current, n];
-                                  return {
-                                    ...d,
-                                    component: {
-                                      ...d.component,
-                                      children: next.length ? next : undefined,
-                                    },
-                                  };
-                                })
-                              }
-                            />
-                            <code>{n}</code>
-                            {(draft.component.children?.includes(n) ?? false) && (
-                              <button
-                                type="button"
-                                className="ws-btn ws-btn--mini"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  select(n);
-                                }}
-                              >
-                                edit →
-                              </button>
-                            )}
-                          </label>
-                        ))}
-                    </div>
-                  </Field>
-                  <p className="ws-note">
-                    encoding.x is the card's <strong>sync key</strong> — children hover-highlight and
-                    click-filter on it.
-                  </p>
+                  <CardComposer
+                    childNames={draft.component.children ?? []}
+                    typeOf={(n) => doc.components[n]?.type ?? localDefs[n]?.type ?? "new"}
+                    available={allNames.filter(
+                      (n) => n !== selected && !(draft.component.children ?? []).includes(n),
+                    )}
+                    catalog={TYPE_CATALOG.filter((e) => !e.kind.startsWith("control:"))}
+                    onReorder={moveChild}
+                    onAddExisting={addChildExisting}
+                    onAddKind={addChildOfKind}
+                    onRemove={removeChild}
+                    onSelectChild={select}
+                  />
+                  {inspectorMode === "advanced" && (
+                    <p className="ws-note">
+                      encoding.x is the card's <strong>sync key</strong> — children hover-highlight and
+                      click-filter on it.
+                    </p>
+                  )}
                 </>
               )}
-              {(["x", "y", "fill"] as const).map((channel) => (
-                <Field key={channel} label={`encoding.${channel}`}>
+              {(draft.component.type === "threshold"
+                ? (["x", "y", "y2", "fill"] as const)
+                : (["x", "y", "fill"] as const)
+              ).map((channel) => (
+                <Field
+                  key={channel}
+                  label={inspectorMode === "simple" ? friendlyLabel(channel, channel) : `encoding.${channel}`}
+                >
                   <select
                     value={encoding[channel] ?? ""}
                     onChange={(e) => setEncoding(channel, e.target.value)}
@@ -790,6 +1159,7 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
                   </select>
                 </Field>
               ))}
+              {inspectorMode === "advanced" && (
               <Field label="filterable by">
                 <div className="ws-chips">
                   {filterFields.map((field) => (
@@ -838,9 +1208,23 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
                   </select>
                 </div>
               </Field>
+              )}
+              </>
+              )}
           </Section>
 
-          <Section id="component" title="Component" collapsed={collapsed} onToggle={toggleSection}>
+          {(inspectorMode === "advanced" ||
+            draft.component.type === "card" ||
+            draft.component.type === "callout" ||
+            draft.component.type === "code" ||
+            draft.component.type === "sql") && (
+          <Section
+            id="component"
+            title={inspectorMode === "simple" ? "Content" : "Component"}
+            collapsed={collapsed}
+            onToggle={toggleSection}
+          >
+              {inspectorMode === "advanced" && (
               <Field label="type">
                 <select
                   value={draft.component.type}
@@ -855,6 +1239,7 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
                   ))}
                 </select>
               </Field>
+              )}
               {(draft.component.type === "card" ||
                 draft.component.type === "callout" ||
                 draft.component.type === "code" ||
@@ -876,11 +1261,34 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
                   />
                 </Field>
               )}
-              <p className="ws-note">
-                Every parameter mirrors the underlying visx/HeroUI prop surface. ↺ resets to the
-                spec default (removes the key from YAML).
-              </p>
+              {inspectorMode === "advanced" && (
+                <p className="ws-note">
+                  Every parameter mirrors the underlying visx/HeroUI prop surface. ↺ resets to the
+                  spec default (removes the key from YAML).
+                </p>
+              )}
           </Section>
+          )}
+
+          {presetsFor(draft.component.type).length > 0 && (
+            <Section id="presets" title="Style presets" collapsed={collapsed} onToggle={toggleSection}>
+              <div className="ws-presets">
+                {presetsFor(draft.component.type).map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className="ws-preset"
+                    onClick={() => applyPreset(preset)}
+                    title={`Apply ${preset.label}`}
+                  >
+                    <span className={`ws-preset__swatch ws-preset__swatch--${preset.swatch}`} />
+                    <span className="ws-preset__label">{preset.label}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="ws-note">A ready-made look applied in one click — then tweak any control below.</p>
+            </Section>
+          )}
 
           <OptionSections
             specs={specsFor(draft.component.type)}
@@ -888,8 +1296,12 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
             onChange={setOption}
             collapsed={collapsed}
             onToggle={toggleSection}
+            mode={inspectorMode}
+            type={draft.component.type}
           />
 
+          {inspectorMode === "advanced" && (
+          <>
           <Section id="animation" title="Animation" collapsed={collapsed} onToggle={toggleSection}>
               <Field label="entrance">
                 <select
@@ -1199,6 +1611,8 @@ export function Workshop({ doc, documentSource, definitionsSource, data, csvMap 
           <Section id="yaml" title="YAML" collapsed={collapsed} onToggle={toggleSection}>
             <pre className="ir-json">{yamlText}</pre>
           </Section>
+          </>
+          )}
         </div>
 
         <footer className="workshop__footer">
@@ -1232,6 +1646,301 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="ws-field__label">{label}</span>
       {children}
     </label>
+  );
+}
+
+/* ── Card composer: drag-to-reorder children + drag/click to add ────── */
+
+function CardComposer({
+  childNames,
+  typeOf,
+  available,
+  catalog,
+  onReorder,
+  onAddExisting,
+  onAddKind,
+  onRemove,
+  onSelectChild,
+}: {
+  childNames: string[];
+  typeOf: (name: string) => string;
+  available: string[];
+  catalog: { kind: string; label: string }[];
+  onReorder: (from: number, to: number) => void;
+  onAddExisting: (name: string) => void;
+  onAddKind: (kind: string) => void;
+  onRemove: (name: string) => void;
+  onSelectChild: (name: string) => void;
+}) {
+  const [tab, setTab] = useState<"existing" | "new">("existing");
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+
+  const resetDrag = () => {
+    setDragIndex(null);
+    setOverIndex(null);
+  };
+
+  return (
+    <div className="ws-composer">
+      <div
+        className={`ws-dropzone ${dropActive ? "ws-dropzone--over" : ""}`}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("text/kp-add")) {
+            e.preventDefault();
+            setDropActive(true);
+          }
+        }}
+        onDragLeave={() => setDropActive(false)}
+        onDrop={(e) => {
+          const raw = e.dataTransfer.getData("text/kp-add");
+          setDropActive(false);
+          if (!raw) return;
+          e.preventDefault();
+          try {
+            const payload = JSON.parse(raw) as { mode: "existing" | "new"; value: string };
+            if (payload.mode === "existing") onAddExisting(payload.value);
+            else onAddKind(payload.value);
+          } catch {
+            /* ignore malformed drag payload */
+          }
+        }}
+      >
+        {childNames.length === 0 ? (
+          <p className="ws-dropzone__hint">No components yet — drag one in, or click to add below.</p>
+        ) : (
+          <div className="ws-compose">
+            {childNames.map((name, i) => (
+              <div
+                key={name}
+                className={`ws-compose__item ${dragIndex === i ? "ws-compose__item--dragging" : ""} ${
+                  overIndex === i && dragIndex !== null && dragIndex !== i ? "ws-compose__item--over" : ""
+                }`}
+                draggable
+                onDragStart={(e) => {
+                  setDragIndex(i);
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", String(i));
+                }}
+                onDragOver={(e) => {
+                  if (dragIndex === null) return;
+                  e.preventDefault();
+                  setOverIndex(i);
+                }}
+                onDrop={(e) => {
+                  if (dragIndex === null) return;
+                  e.preventDefault();
+                  if (dragIndex !== i) onReorder(dragIndex, i);
+                  resetDrag();
+                }}
+                onDragEnd={resetDrag}
+              >
+                <span className="ws-compose__grip" aria-hidden="true">
+                  ⋮⋮
+                </span>
+                <button
+                  type="button"
+                  className="ws-compose__name"
+                  onClick={() => onSelectChild(name)}
+                  title={`edit ${name}`}
+                >
+                  {name}
+                </button>
+                <span className="ws-compose__type">{typeOf(name)}</span>
+                <button
+                  type="button"
+                  className="ws-compose__remove"
+                  title="remove from card"
+                  onClick={() => onRemove(name)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="ws-palette">
+        <div className="ws-palette__tab">
+          <button type="button" className={tab === "existing" ? "is-active" : ""} onClick={() => setTab("existing")}>
+            Existing
+          </button>
+          <button type="button" className={tab === "new" ? "is-active" : ""} onClick={() => setTab("new")}>
+            New
+          </button>
+        </div>
+        <div className="ws-palette__strip">
+          {tab === "existing" ? (
+            available.length === 0 ? (
+              <p className="ws-dropzone__hint">All components are already in this card.</p>
+            ) : (
+              available.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  className="ws-palette__item"
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.effectAllowed = "copy";
+                    e.dataTransfer.setData("text/kp-add", JSON.stringify({ mode: "existing", value: name }));
+                  }}
+                  onClick={() => onAddExisting(name)}
+                  title={`add ${name}`}
+                >
+                  <span className="ws-palette__thumb">
+                    <KindThumb kind={typeOf(name)} />
+                  </span>
+                  <span className="ws-palette__name">{name}</span>
+                </button>
+              ))
+            )
+          ) : (
+            catalog.map((entry) => (
+              <button
+                key={entry.kind}
+                type="button"
+                className="ws-palette__item"
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "copy";
+                  e.dataTransfer.setData("text/kp-add", JSON.stringify({ mode: "new", value: entry.kind }));
+                }}
+                onClick={() => onAddKind(entry.kind)}
+                title={`add a new ${entry.label}`}
+              >
+                <span className="ws-palette__thumb">
+                  <KindThumb kind={entry.kind} />
+                </span>
+                <span className="ws-palette__name">{entry.label}</span>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Flow editor (nodes + edges for the React Flow component) ────────── */
+
+function FlowEditor({
+  nodes,
+  edges,
+  onNodes,
+  onEdges,
+}: {
+  nodes: WsFlowNode[];
+  edges: WsFlowEdge[];
+  onNodes: (nodes: WsFlowNode[]) => void;
+  onEdges: (edges: WsFlowEdge[]) => void;
+}) {
+  const ids = nodes.map((n) => n.id);
+  const patchNode = (idx: number, p: Partial<WsFlowNode>) =>
+    onNodes(
+      nodes.map((n, i) => {
+        if (i !== idx) return n;
+        const next: Record<string, unknown> = { ...n, ...p };
+        for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+        return next as unknown as WsFlowNode;
+      }),
+    );
+  const patchEdge = (idx: number, p: Partial<WsFlowEdge>) =>
+    onEdges(edges.map((e, i) => (i === idx ? { ...e, ...p } : e)));
+  const addNode = () => {
+    const taken = new Set(ids);
+    let i = nodes.length + 1;
+    let id = `node_${i}`;
+    while (taken.has(id)) id = `node_${++i}`;
+    onNodes([
+      ...nodes,
+      { id, label: `Node ${i}`, x: (nodes.length % 4) * 200, y: Math.floor(nodes.length / 4) * 130, color: "#7c9aff" },
+    ]);
+  };
+  const removeNode = (n: WsFlowNode, idx: number) => {
+    onNodes(nodes.filter((_, j) => j !== idx));
+    onEdges(edges.filter((e) => e.source !== n.id && e.target !== n.id));
+  };
+  const addEdge = () => {
+    if (ids.length < 2) return;
+    onEdges([...edges, { source: ids[0]!, target: ids[1]!, animated: true }]);
+  };
+
+  return (
+    <>
+      <h4 className="ws-group">Nodes</h4>
+      <div className="ws-flowlist">
+        {nodes.map((n, i) => (
+          <div key={n.id} className="ws-floweditnode">
+            <div className="ws-flowrow">
+              <input
+                type="color"
+                value={typeof n.color === "string" && /^#[0-9a-fA-F]{6}/.test(n.color) ? n.color.slice(0, 7) : "#7c9aff"}
+                onChange={(e) => patchNode(i, { color: e.target.value })}
+              />
+              <input type="text" value={n.label ?? n.id} onChange={(e) => patchNode(i, { label: e.target.value })} />
+              <button type="button" className="ws-btn" title="remove node" onClick={() => removeNode(n, i)}>
+                ×
+              </button>
+            </div>
+            <div className="ws-flowrow">
+              <IconPicker value={n.icon} onChange={(icon) => patchNode(i, { icon })} />
+              <input
+                type="text"
+                placeholder="subtitle"
+                value={n.sublabel ?? ""}
+                onChange={(e) => patchNode(i, { sublabel: e.target.value || undefined })}
+              />
+            </div>
+          </div>
+        ))}
+        {nodes.length === 0 && <p className="ws-note">No nodes yet.</p>}
+      </div>
+      <button type="button" className="ws-btn" onClick={addNode}>
+        + Add node
+      </button>
+
+      <h4 className="ws-group">Edges</h4>
+      <div className="ws-flowlist">
+        {edges.map((e, i) => (
+          <div key={i} className="ws-flowrow">
+            <select value={e.source} onChange={(ev) => patchEdge(i, { source: ev.target.value })}>
+              {ids.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+            <span className="ws-flowrow__arrow">→</span>
+            <select value={e.target} onChange={(ev) => patchEdge(i, { target: ev.target.value })}>
+              {ids.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={`ws-toggle ${e.animated ? "ws-toggle--on" : ""}`}
+              title="animated"
+              aria-pressed={Boolean(e.animated)}
+              onClick={() => patchEdge(i, { animated: !e.animated })}
+            >
+              <i />
+            </button>
+            <button type="button" className="ws-btn" title="remove edge" onClick={() => onEdges(edges.filter((_, j) => j !== i))}>
+              ×
+            </button>
+          </div>
+        ))}
+        {edges.length === 0 && <p className="ws-note">No edges yet.</p>}
+      </div>
+      <button type="button" className="ws-btn" onClick={addEdge} disabled={ids.length < 2}>
+        + Add edge
+      </button>
+      <p className="ws-note">Drag nodes on the canvas to reposition — positions save with the component.</p>
+    </>
   );
 }
 
@@ -1280,6 +1989,11 @@ function TreeBranch({
                 </span>
               )}
               <button type="button" className="ws-item__btn" onClick={() => onSelect(node.name)}>
+                <Icon
+                  icon={typeIconName(type)}
+                  size={14}
+                  className={`ws-item__icon ${isComponentTone(type) ? "ws-item__icon--component" : ""}`}
+                />
                 <code>{node.name}</code>
                 <span className="ws-item__type">{type}</span>
               </button>
@@ -1361,10 +2075,9 @@ function WorkshopSidebar({
             {controls.map((name) => (
               <div key={name} className="ws-tree__node" role="treeitem">
                 <div className={`ws-item ${name === activeControl ? "ws-item--active" : ""}`}>
-                  <span className="ws-chevron ws-chevron--leaf" aria-hidden="true">
-                    ◈
-                  </span>
+                  <span className="ws-chevron ws-chevron--leaf" aria-hidden="true" />
                   <button type="button" className="ws-item__btn" onClick={() => onSelectControl(name)}>
+                    <Icon icon="lucide:sliders-horizontal" size={14} className="ws-item__icon" />
                     <code>{name}</code>
                     <span className="ws-item__type">control</span>
                   </button>
@@ -1723,6 +2436,65 @@ function KindThumb({ kind }: { kind: string }) {
           <path d="M 12 38 C 28 36, 30 12, 42 12 S 56 34, 72 38" {...common} stroke={accent} />
         </svg>
       );
+    case "violin":
+      return (
+        <svg viewBox="0 0 84 44" width="84" height="44">
+          <path d="M 28 5 C 18 16, 18 28, 28 39 C 38 28, 38 16, 28 5 Z" fill={accent} opacity={0.4} />
+          <line x1="28" y1="7" x2="28" y2="37" stroke={accent} strokeWidth={1.2} />
+          <rect x="25" y="17" width="6" height="11" rx="1.5" fill={accent} />
+          <path d="M 56 9 C 48 18, 48 27, 56 36 C 64 27, 64 18, 56 9 Z" fill={mint} opacity={0.45} />
+          <line x1="56" y1="10" x2="56" y2="35" stroke={mint} strokeWidth={1.2} />
+          <rect x="53" y="19" width="6" height="9" rx="1.5" fill={mint} />
+        </svg>
+      );
+    case "box":
+      return (
+        <svg viewBox="0 0 84 44" width="84" height="44">
+          <line x1="30" y1="6" x2="30" y2="14" stroke={accent} strokeWidth={1.4} />
+          <rect x="22" y="14" width="16" height="16" rx="2" fill={accent} opacity={0.4} stroke={accent} strokeWidth={1.2} />
+          <line x1="22" y1="22" x2="38" y2="22" stroke="#fff" strokeWidth={1.4} />
+          <line x1="30" y1="30" x2="30" y2="38" stroke={accent} strokeWidth={1.4} />
+          <line x1="54" y1="10" x2="54" y2="16" stroke={mint} strokeWidth={1.4} />
+          <rect x="46" y="16" width="16" height="14" rx="2" fill={mint} opacity={0.4} stroke={mint} strokeWidth={1.2} />
+          <line x1="46" y1="24" x2="62" y2="24" stroke="#fff" strokeWidth={1.4} />
+          <line x1="54" y1="30" x2="54" y2="36" stroke={mint} strokeWidth={1.4} />
+        </svg>
+      );
+    case "threshold":
+      return (
+        <svg viewBox="0 0 84 44" width="84" height="44">
+          <path d="M 12 18 C 22 22, 32 30, 42 26 L 42 32 C 32 36, 22 28, 12 24 Z" fill="#e0aaff" opacity={0.6} />
+          <path d="M 42 26 C 54 22, 62 12, 72 16 L 72 22 C 62 18, 54 28, 42 32 Z" fill={mint} opacity={0.6} />
+          <path d="M 12 18 C 22 22, 32 30, 42 26 S 62 12, 72 16" fill="none" stroke={accent} strokeWidth={1.5} />
+          <path d="M 12 24 C 22 28, 32 22, 42 32 S 62 18, 72 22" fill="none" stroke={muted} strokeWidth={1.2} strokeDasharray="2 2" />
+        </svg>
+      );
+    case "bands":
+      return (
+        <svg viewBox="0 0 84 44" width="84" height="44">
+          <path d="M 12 26 C 30 18, 48 14, 72 12 L 72 20 C 48 22, 30 26, 12 32 Z" fill={accent} opacity={0.18} />
+          <path d="M 12 29 C 30 22, 48 18, 72 15" fill="none" stroke={accent} strokeWidth={2} />
+          <path d="M 12 33 C 30 28, 48 25, 72 23" fill="none" stroke={mint} strokeWidth={2} />
+          <path d="M 12 37 C 30 34, 48 33, 72 31" fill="none" stroke="#e0aaff" strokeWidth={2} />
+        </svg>
+      );
+    case "panels":
+      return (
+        <svg viewBox="0 0 84 44" width="84" height="44">
+          {[
+            [6, 5, accent],
+            [44, 5, "#e0aaff"],
+            [6, 25, mint],
+            [44, 25, "#f0a3c0"],
+          ].map(([gx, gy, col], i) => (
+            <g key={i} transform={`translate(${gx}, ${gy})`}>
+              <rect x={0} y={0} width={34} height={16} rx={3} fill="rgba(255,255,255,0.04)" stroke={muted} strokeOpacity={0.4} />
+              <path d="M 3 12 C 9 4, 17 6, 31 3" fill="none" stroke={col as string} strokeWidth={1.4} />
+              <path d="M 3 13 C 9 8, 17 9, 31 7" fill="none" stroke={col as string} strokeWidth={1.1} strokeDasharray="2 1.5" opacity={0.8} />
+            </g>
+          ))}
+        </svg>
+      );
     case "sparkline":
       return (
         <svg viewBox="0 0 84 44" width="84" height="44">
@@ -1767,6 +2539,18 @@ function KindThumb({ kind }: { kind: string }) {
           {[20, 26, 58, 64].map((cx, i) => (
             <circle key={i} cx={cx} cy={38} r={2.2} fill={accent} opacity={0.8} />
           ))}
+        </svg>
+      );
+    case "flow":
+      return (
+        <svg viewBox="0 0 84 44" width="84" height="44">
+          <line x1="28" y1="22" x2="40" y2="22" stroke={muted} strokeWidth={1.4} />
+          <line x1="56" y1="22" x2="68" y2="13" stroke={muted} strokeWidth={1.4} />
+          <line x1="56" y1="22" x2="68" y2="31" stroke={muted} strokeWidth={1.4} />
+          <rect x="12" y="16" width="16" height="12" rx="3" fill={accent} opacity={0.85} />
+          <rect x="40" y="16" width="16" height="12" rx="3" fill={mint} opacity={0.85} />
+          <rect x="68" y="7" width="14" height="11" rx="3" {...common} stroke={accent} />
+          <rect x="68" y="26" width="14" height="11" rx="3" {...common} stroke={mint} />
         </svg>
       );
     case "code":
@@ -1994,17 +2778,45 @@ function OptionSections({
   onChange,
   collapsed,
   onToggle,
+  mode = "advanced",
+  type = "",
 }: {
   specs: OptionSpec[];
   def: ComponentDef;
   onChange: (key: string, value: unknown) => void;
   collapsed: Record<string, boolean>;
   onToggle: (id: string) => void;
+  mode?: InspectorMode;
+  type?: string;
 }) {
   if (specs.length === 0) {
+    if (mode === "simple") return null;
     return (
       <Section id="options" title="Options" collapsed={collapsed} onToggle={onToggle}>
         <p className="ws-note">No options published for this component type yet.</p>
+      </Section>
+    );
+  }
+  // Simple mode: one "Style" section showing only the essential options with
+  // plain-language labels (driven by friendly.ts, an editor-only concern).
+  if (mode === "simple") {
+    const essentialKeys = ESSENTIAL_OPTIONS[type] ?? specs.slice(0, SIMPLE_FALLBACK_COUNT).map((s) => s.key);
+    const list = essentialKeys
+      .map((key) => specs.find((s) => s.key === key))
+      .filter((s): s is OptionSpec => Boolean(s));
+    if (list.length === 0) return null;
+    return (
+      <Section id="opt:simple" title="Style" collapsed={collapsed} onToggle={onToggle}>
+        {list.map((spec) => (
+          <OptionRow
+            key={spec.key}
+            spec={spec}
+            label={friendlyLabel(spec.key, spec.label)}
+            value={optionValue(def, spec)}
+            explicit={def.options?.[spec.key] !== undefined}
+            onChange={(value) => onChange(spec.key, value)}
+          />
+        ))}
       </Section>
     );
   }
@@ -2042,15 +2854,17 @@ function OptionRow({
   value,
   explicit,
   onChange,
+  label,
 }: {
   spec: OptionSpec;
   value: unknown;
   explicit: boolean;
   onChange: (value: unknown | undefined) => void;
+  label?: string;
 }) {
   return (
     <div className="ws-option-row">
-      <span className="ws-field__label">{spec.label}</span>
+      <span className="ws-field__label">{label ?? spec.label}</span>
       <OptionControlInput spec={spec} value={value} onChange={onChange} />
       <button
         type="button"
@@ -2138,6 +2952,13 @@ function OptionControlInput({
             </option>
           ))}
         </select>
+      );
+    case "icon":
+      return (
+        <IconPicker
+          value={typeof value === "string" && value ? value : undefined}
+          onChange={(icon) => onChange(icon)}
+        />
       );
     case "text":
     default:

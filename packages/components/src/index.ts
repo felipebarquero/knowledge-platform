@@ -15,12 +15,16 @@ export { SqlConsole } from "./SqlConsole";
 export type { SqlConsoleProps } from "./SqlConsole";
 export {
   AreaClosedPlot,
+  BandsPlot,
   BarsPlot,
+  BoxPlot,
   CURVES,
   DensityPlot,
   DonutPlot,
   HistogramPlot,
   SparklinePlot,
+  ThresholdPlot,
+  ViolinPlot,
   XYPlot,
   sparkPoints,
 } from "./plots";
@@ -32,7 +36,13 @@ export { CardSyncContext, isDimmed, useCardSync } from "./sync";
 export type { CardSync } from "./sync";
 export { DocSyncProvider, LiveControl, useDocSync } from "./doc-sync";
 export type { DocSync, LiveControlProps } from "./doc-sync";
-export { CsvContext, useCsvMap } from "./runtime-context";
+export { CsvContext, useCsvMap, CellSessionContext, useCellSession } from "./runtime-context";
+export type { CellSession, NotebookCellData } from "./runtime-context";
+export { CodeEditor } from "./CodeEditor";
+export { Icon, loadIconCatalog } from "./Icon";
+export type { IconProps } from "./Icon";
+export { kernelScopes } from "@knowledge/runtime";
+export type { KernelScopeInfo } from "@knowledge/runtime";
 export { ChartTip, TipBox, fmtVal, useTip } from "./tooltip";
 export type { TipState } from "./tooltip";
 export {

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { ParentSize } from "@visx/responsive";
 import type { AnimationDef, ComponentDef } from "@knowledge/ir";
 import type { DataTable } from "@knowledge/data";
@@ -8,6 +8,10 @@ import type { AggregateMode } from "@knowledge/data";
 import { applyEffects, effectsFor } from "@knowledge/sync";
 import { playEntrance } from "./animation";
 import { CardView } from "./CardView";
+import type { FlowEdge, FlowNode } from "./Flow";
+
+// React Flow is heavy; lazy-load it so it stays out of the main chunk.
+const FlowView = lazy(() => import("./Flow"));
 import { CodeBlock } from "./CodeBlock";
 import type { CellOutputData } from "./CellOutput";
 import { HeroRender } from "./hero/HeroRender";
@@ -18,12 +22,17 @@ import { useCsvMap } from "./runtime-context";
 import { HierarchyDiagram } from "./diagram";
 import {
   AreaClosedPlot,
+  BandsPlot,
   BarsPlot,
+  BoxPlot,
   CURVES,
   DensityPlot,
   DonutPlot,
   HistogramPlot,
+  PanelsPlot,
   SparklinePlot,
+  ThresholdPlot,
+  ViolinPlot,
   XYPlot,
 } from "./plots";
 import type { CurveName, GridMode } from "./plots";
@@ -57,6 +66,17 @@ export interface ComponentRendererProps {
   visited?: string[];
   /** Render without the outer figure chrome (used for card children). */
   bare?: boolean;
+  /**
+   * Workshop-only: make this component (and card children) click-selectable on
+   * the canvas. The reader never passes these, so its rendering is identical.
+   */
+  selectable?: boolean;
+  /** Name of the currently-selected component (gets the active outline). */
+  activeName?: string;
+  /** Called with a component name when its element is clicked. */
+  onPick?: (name: string) => void;
+  /** Workshop-only: persist dragged flow node positions back to the IR. */
+  onFlowNodes?: (name: string, nodes: FlowNode[]) => void;
 }
 
 function num(value: unknown): number | undefined {
@@ -94,8 +114,24 @@ export function ComponentRenderer({
   csvMap: csvMapProp,
   visited = [],
   bare = false,
+  selectable = false,
+  activeName,
+  onPick,
+  onFlowNodes,
 }: ComponentRendererProps) {
   const ref = useRef<HTMLDivElement | null>(null);
+  // Workshop click-to-select: spread onto each branch's outermost element.
+  // stopPropagation makes the innermost element win (a card child over its card).
+  const pickClass = selectable ? ` kp-pick${name === activeName ? " kp-pick--active" : ""}` : "";
+  const pickAttrs: { "data-kp-name"?: string; onClick?: (e: ReactMouseEvent) => void } = selectable
+    ? {
+        "data-kp-name": name,
+        onClick: (e) => {
+          e.stopPropagation();
+          onPick?.(name);
+        },
+      }
+    : {};
   // Card-scoped sync state (only used when this component is a card).
   const [cardHover, setCardHover] = useState<string | null>(null);
   const [cardFilter, setCardFilter] = useState<string | null>(null);
@@ -145,7 +181,7 @@ export function ComponentRenderer({
       setFilterValue: setCardFilter,
     };
     return (
-      <div ref={ref} className="kp-cardwrap">
+      <div ref={ref} className={`kp-cardwrap${pickClass}`} {...pickAttrs}>
         <CardView
           title={str(o.title)}
           body={def.description}
@@ -203,6 +239,10 @@ export function ComponentRenderer({
                         csvMap={csvMap}
                         visited={[...visited, name]}
                         bare
+                        selectable={selectable}
+                        activeName={activeName}
+                        onPick={onPick}
+                        onFlowNodes={onFlowNodes}
                       />
                     </div>
                   );
@@ -218,7 +258,7 @@ export function ComponentRenderer({
   // HeroUI component family — self-contained presentational widgets.
   if (isHeroType(def.type)) {
     return (
-      <div className="kp-selfcontained hui-host" ref={ref}>
+      <div className={`kp-selfcontained hui-host${pickClass}`} ref={ref} {...pickAttrs}>
         <HeroRender type={def.type} o={o} />
       </div>
     );
@@ -253,6 +293,7 @@ export function ComponentRenderer({
         inject={isR && def.data && injectRows ? { name: def.data.ref, rows: injectRows } : undefined}
         uses={Array.isArray(o.uses) ? (o.uses.filter((u) => typeof u === "string") as string[]) : undefined}
         autoRun={bool(o.autoRun, true)}
+        cellId={name}
       />
     );
   } else if (def.type === "sql") {
@@ -271,6 +312,38 @@ export function ComponentRenderer({
         maxRows={num(o.maxRows) ?? 50}
         autoRun={bool(o.autoRun, true)}
       />
+    );
+  } else if (def.type === "flow") {
+    const flowNodes = Array.isArray(o.nodes) ? (o.nodes as FlowNode[]) : [];
+    const flowEdges = Array.isArray(o.edges) ? (o.edges as FlowEdge[]) : [];
+    body = (
+      <div className="kp-flow-host" style={{ height: num(o.height) ?? 360 }}>
+        <Suspense fallback={<div className="kp-component__canvas"><span>loading flow…</span></div>}>
+          <FlowView
+            nodes={flowNodes}
+            edges={flowEdges}
+            options={o}
+            onNodesPersist={onFlowNodes ? (nodes) => onFlowNodes(name, nodes) : undefined}
+            renderEmbed={(childName) => {
+              const childDef = registry?.[childName];
+              if (!childDef || visited.includes(childName) || childName === name) return null;
+              const childRows = childDef.data ? dataMap?.[childDef.data.ref] : undefined;
+              return (
+                <ComponentRenderer
+                  name={childName}
+                  def={childDef}
+                  rows={childRows}
+                  registry={registry}
+                  dataMap={dataMap}
+                  csvMap={csvMap}
+                  visited={[...visited, name]}
+                  bare
+                />
+              );
+            }}
+          />
+        </Suspense>
+      </div>
     );
   } else if (!rows) {
     body = (
@@ -421,6 +494,161 @@ export function ComponentRenderer({
           : <Misconfigured message="density needs encoding.x (a numeric column)" />;
         break;
 
+      case "violin":
+        body =
+          encoding.x && encoding.y ? (
+            chartBox(0, (width) => (
+              <ViolinPlot
+                rows={rows}
+                x={encoding.x!}
+                y={encoding.y!}
+                fill={str(encoding.fill)}
+                width={width}
+                height={height}
+                split={bool(o.split, true)}
+                showBox={bool(o.showBox, true)}
+                showMean={bool(o.showMean, true)}
+                showPoints={bool(o.showPoints, true)}
+                bandwidth={num(o.bandwidth) ?? 2}
+                fillOpacity={num(o.fillOpacity) ?? 0.55}
+                grid={grid}
+                yTicks={yTicks}
+              />
+            ))
+          ) : (
+            <Misconfigured message="violin needs encoding.x (category) and encoding.y (value)" />
+          );
+        break;
+
+      case "box":
+        body =
+          encoding.x && encoding.y ? (
+            chartBox(0, (width) => (
+              <BoxPlot
+                rows={rows}
+                x={encoding.x!}
+                y={encoding.y!}
+                fill={str(encoding.fill)}
+                width={width}
+                height={height}
+                showMean={bool(o.showMean, true)}
+                showPoints={bool(o.showPoints, true)}
+                fillOpacity={num(o.fillOpacity) ?? 0.6}
+                grid={grid}
+                yTicks={yTicks}
+              />
+            ))
+          ) : (
+            <Misconfigured message="box needs encoding.x (category) and encoding.y (value)" />
+          );
+        break;
+
+      case "threshold": {
+        const y2 = str(encoding.y2);
+        body =
+          encoding.x && encoding.y && y2 ? (
+            chartBox(0, (width) => (
+              <ThresholdPlot
+                rows={rows}
+                x={encoding.x!}
+                y={encoding.y!}
+                y2={y2}
+                width={width}
+                height={height}
+                curve={curve}
+                aboveColor={str(o.aboveColor) ?? "#7fd1b9"}
+                aboveOpacity={num(o.aboveOpacity) ?? 0.55}
+                belowColor={str(o.belowColor) ?? "#e0aaff"}
+                belowOpacity={num(o.belowOpacity) ?? 0.55}
+                line1Color={str(o.line1Color) ?? "#e2e8f0"}
+                line1Width={num(o.line1Width) ?? 2}
+                line1Dash={bool(o.line1Dash, false)}
+                showLine1={bool(o.showLine1, true)}
+                line2Color={str(o.line2Color) ?? "#94a3b8"}
+                line2Width={num(o.line2Width) ?? 1.5}
+                line2Dash={bool(o.line2Dash, true)}
+                showLine2={bool(o.showLine2, true)}
+                grid={grid}
+                xTicks={xTicks}
+                yTicks={yTicks}
+              />
+            ))
+          ) : (
+            <Misconfigured message="threshold needs encoding.x, encoding.y (series 1) and encoding.y2 (series 2)" />
+          );
+        break;
+      }
+
+      case "bands":
+        body =
+          encoding.x && encoding.y ? (
+            chartBox(0, (width) => (
+              <BandsPlot
+                rows={rows}
+                x={encoding.x!}
+                y={encoding.y!}
+                fill={str(encoding.fill)}
+                width={width}
+                height={height}
+                band={oneOf(o.band, ["none", "sd", "se", "ci95"] as const, "ci95")}
+                bandOpacity={num(o.bandOpacity) ?? 0.18}
+                lineWidth={num(o.lineWidth) ?? 2.5}
+                glow={bool(o.glow, true)}
+                glowStrength={num(o.glowStrength) ?? 3}
+                curve={curve}
+                showLegend={bool(o.showLegend, true)}
+                showPoints={bool(o.showPoints, false)}
+                crosshair={bool(o.crosshair, true)}
+                grid={grid}
+                xTicks={xTicks}
+                yTicks={yTicks}
+                bandGradient={bool(o.bandGradient, false)}
+                palette={str(o.palette)}
+                xLabel={str(o.xLabel)}
+              />
+            ))
+          ) : (
+            <Misconfigured message="bands needs encoding.x, encoding.y and (optional) encoding.fill for series" />
+          );
+        break;
+
+      case "panels": {
+        const insetRef = str(o.insetRef);
+        body =
+          encoding.x && encoding.y && encoding.facet ? (
+            <PanelsPlot
+              rows={rows}
+              x={encoding.x}
+              y={encoding.y}
+              seriesField={str(encoding.fill)}
+              facetField={encoding.facet}
+              insetRows={insetRef ? dataMap?.[insetRef] : undefined}
+              insetPanelField={str(o.insetPanelField) ?? "panel"}
+              insetMetricField={str(o.insetMetricField) ?? "metric"}
+              insetValueField={str(o.insetValueField) ?? "diff"}
+              perPanelHeight={num(o.height) ?? 230}
+              initialCols={num(o.columns) ?? 2}
+              solidSeries={str(o.solidSeries) ?? "Bounce"}
+              band={oneOf(o.band, ["none", "sd", "se", "ci95"] as const, "none")}
+              bandOpacity={num(o.bandOpacity) ?? 0.14}
+              lineWidth={num(o.lineWidth) ?? 2}
+              glow={bool(o.glow, true)}
+              glowStrength={num(o.glowStrength) ?? 2.6}
+              curve={curve}
+              showInset={bool(o.showInset, true)}
+              showLegend={bool(o.showLegend, true)}
+              crosshair={bool(o.crosshair, true)}
+              toolbar={bool(o.toolbar, true)}
+              grid={grid}
+              yTicks={yTicks}
+              palette={str(o.palette)}
+            />
+          ) : (
+            <Misconfigured message="panels needs encoding.x, encoding.y and encoding.facet (encoding.fill = the paired series)" />
+          );
+        break;
+      }
+
       case "sparkline": {
         const valueField = encoding.y ?? encoding.x;
         body = valueField
@@ -514,9 +742,9 @@ export function ComponentRenderer({
   );
 
   // Self-contained surfaces (their own window chrome) skip the figure caption.
-  if (def.type === "code" || def.type === "sql") {
+  if (def.type === "code" || def.type === "sql" || def.type === "flow") {
     return (
-      <div className="kp-selfcontained" ref={ref}>
+      <div className={`kp-selfcontained${pickClass}`} ref={ref} {...pickAttrs}>
         {wrappedBody}
       </div>
     );
@@ -524,7 +752,7 @@ export function ComponentRenderer({
 
   if (bare) {
     return (
-      <div className="kp-mini" ref={ref}>
+      <div className={`kp-mini${pickClass}`} ref={ref} {...pickAttrs}>
         <h4 className="kp-mini__title">{str(o.title) ?? prettyName(name)}</h4>
         {wrappedBody}
       </div>
@@ -536,7 +764,7 @@ export function ComponentRenderer({
     .join(", ");
 
   return (
-    <figure className="kp-card kp-component" ref={ref}>
+    <figure className={`kp-card kp-component${pickClass}`} ref={ref} {...pickAttrs}>
       <span className="kp-card__tag kp-card__tag--component">{def.type}</span>
       <code className="kp-card__name">{name}</code>
       <div className="kp-component__plot">{wrappedBody}</div>

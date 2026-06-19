@@ -144,7 +144,7 @@ components:
     options:
       language: r
       title: model-effects.R
-      uses: [sprint_query]
+      uses: [ sprint_query ]
       elapsed: 0.1s
       output: |-
         Fastest squad mean (from SQL): 10.84 s
@@ -152,10 +152,16 @@ components:
   # ── HeroUI component showcase ───────────────────────────────────────
   ui_button:
     type: button
-    options: { label: Add to plan, color: primary, variant: shadow }
+    options:
+      {
+        label: Add to plan,
+        color: primary,
+        variant: shadow,
+        icon: "lucide:calendar-plus"
+      }
   ui_chip:
     type: chip
-    options: { label: Elite, color: success, variant: flat }
+    options: { label: Elite, color: success, variant: flat, icon: "lucide:zap" }
   ui_progress:
     type: progress
     options: { label: Season completion, value: 64, color: secondary }
@@ -405,6 +411,247 @@ components:
       columns: 3
       gap: 18
 
+  # Compact component embedded inside the diagnostics flow node.
+  coef_spark:
+    type: sparkline
+    data:
+      ref: sprint_study
+    encoding:
+      x: week
+      y: sprint_time
+    options:
+      color: "#e5b567"
+      height: 40
+      fillArea: true
+
+  # React Flow node-graph: the whole pipeline as draggable nodes with service-
+  # style icon tiles. Stages are colored data (blue) → compute (violet) →
+  # output (emerald/amber). Hover a node to highlight its neighbourhood; the
+  # diagnostics node embeds a live sparkline component.
+  model_workflow:
+    type: flow
+    options:
+      background: dots
+      controls: true
+      minimap: true
+      edgeType: smoothstep
+      animated: true
+      height: 460
+      nodeColor: "#7c9aff"
+      nodes:
+        - id: sprint_csv
+          label: Sprint sessions
+          sublabel: 6 athletes · 16 weeks
+          icon: lucide:table-2
+          x: 0
+          y: 170
+          color: "#7c9aff"
+        - id: sql_agg
+          label: SQL aggregate
+          sublabel: DuckDB · GROUP BY
+          icon: lucide:database
+          x: 300
+          y: 170
+          color: "#c792ea"
+        - id: webr
+          label: WebR · lmer()
+          sublabel: lme4 in WASM R
+          icon: logos:r-lang
+          x: 600
+          y: 170
+          color: "#c792ea"
+        - id: fixed
+          label: Fixed effects
+          sublabel: load + week
+          icon: lucide:sigma
+          x: 910
+          y: 40
+          color: "#58c896"
+        - id: random
+          label: Random intercepts
+          sublabel: by athlete
+          icon: lucide:dices
+          x: 910
+          y: 200
+          color: "#58c896"
+        - id: diagnostics
+          label: Diagnostics
+          sublabel: sprint time by week
+          icon: lucide:activity
+          x: 1230
+          y: 200
+          color: "#e5b567"
+          children:
+            - coef_spark
+      edges:
+        - source: sprint_csv
+          target: sql_agg
+          animated: true
+        - source: sql_agg
+          target: webr
+          animated: true
+        - source: webr
+          target: fixed
+          animated: true
+        - source: webr
+          target: random
+          animated: true
+        - source: fixed
+          target: diagnostics
+        - source: random
+          target: diagnostics
+      span: 1
+      nodeRadius: 13
+
+  # ── Statistical distributions (visx violin + box) ───────────────────
+  # Split violin by squad, grouped by condition — the raincloud view of a
+  # mixed-effects design. Hover a squad to highlight it across both plots.
+  reaction_violin:
+    type: violin
+    data:
+      ref: rt_study
+    encoding:
+      x: condition
+      y: reaction_time
+      fill: squad
+    options:
+      split: true
+      showBox: true
+      height: 340
+
+  reaction_box:
+    type: box
+    data:
+      ref: rt_study
+    encoding:
+      x: condition
+      y: reaction_time
+      fill: squad
+    options:
+      height: 300
+
+  rt_panel:
+    type: card
+    encoding:
+      x: squad
+    children:
+      - reaction_violin
+      - reaction_box
+    options:
+      title: Reaction time — Go/No-go × squad
+      columns: 2
+      gap: 16
+      variant: glass
+
+  # ── Threshold / difference area (visx) ──────────────────────────────
+  # Left vs right leg force across one squat rep — limb asymmetry. The area
+  # is green where the left leg drives harder, violet where the right does.
+  # Every colour, opacity, curve and line style is editable in the workshop.
+  squat_asymmetry:
+    type: threshold
+    data:
+      ref: squat_grf
+    encoding:
+      x: phase
+      y: left_leg
+      y2: right_leg
+    options:
+      curve: monotoneX
+      aboveColor: "#7fd1b9"
+      aboveOpacity: 0.55
+      belowColor: "#e0aaff"
+      belowOpacity: 0.6
+      line1Color: "#e2e8f0"
+      line1Width: 2
+      line2Color: "#94a3b8"
+      line2Width: 1.5
+      line2Dash: true
+      height: 320
+
+  # ── Bands: glowing mean velocity profiles ± 95% CI (visx) ───────────
+  # One luminescent line per load (intensity), each with its confidence band.
+  # Click the legend to toggle a series; hover for a crosshair read-out.
+  velocity_bands:
+    type: bands
+    data:
+      ref: velocity_study
+    encoding:
+      x: cycle
+      y: velocity
+      fill: intensity
+    options:
+      band: ci95
+      bandOpacity: 0.12
+      lineWidth: 1.5
+      glow: true
+      glowStrength: 3
+      curve: monotoneX
+      showLegend: true
+      crosshair: true
+      height: 360
+
+  # ── Panels: faceted bounce vs no-bounce profiles + inset DIFF box plots
+  # 2×2 small-multiples (one load/condition per panel). Each panel pairs a
+  # solid (Bounce) and dashed (No-Bounce) glowing mean-velocity line and
+  # carries an inset difference box plot (Vpeak1/Vpeak2/Vmean, * = p<.05).
+  # Toolbar: Interact · Pan · Zoom · Reset · View · Export; the crosshair
+  # syncs across all four panels.
+  neuromuscular_panels:
+    type: panels
+    data:
+      ref: velocity_paired
+    encoding:
+      x: cycle
+      y: velocity
+      fill: series
+      facet: panel
+    options:
+      columns: 2
+      solidSeries: Bounce
+      palette: "#3b82f6,#a855f7,#22c55e,#ec4899"
+      lineWidth: 2.4
+      curve: natural
+      glow: true
+      glowStrength: 2.6
+      band: none
+      showInset: true
+      insetRef: velocity_diffs
+      insetPanelField: panel
+      insetMetricField: metric
+      insetValueField: diff
+      toolbar: true
+      showLegend: true
+      crosshair: true
+      height: 250
+
+  # ── Pareto frontiers with 95% confidence-interval areas (visx bands) ──
+  # Three Pareto frontiers over the wash moving-average; each glowing line
+  # carries a luminous gradient CI band (mean ± 95% CI). Toggle a frontier
+  # — or the "95% CI" area itself — in the legend; hover for a crosshair
+  # read-out incl. the 95% CI (±) at that wash.
+  pareto_frontiers:
+    type: bands
+    data:
+      ref: pareto_fronts
+    encoding:
+      x: wash
+      y: volume
+      fill: frontier
+    options:
+      band: ci95
+      bandOpacity: 0.22
+      bandGradient: true
+      lineWidth: 2.5
+      glow: true
+      glowStrength: 2.8
+      curve: monotoneX
+      showPoints: true
+      showLegend: true
+      crosshair: true
+      palette: "#ef4444,#22c55e,#3b82f6"
+      xLabel: Wash (MA)
+      height: 440
+
 datasets:
   sprint_study:
     source: csv
@@ -422,6 +669,30 @@ datasets:
     source: csv
     path: data/model_diagnostics.csv
     description: Fitted values, residuals and QQ pairs
+  rt_study:
+    source: csv
+    path: data/reaction_times.csv
+    description: Reaction times (ms) by Go/No-go condition and Elite/Amateur squad
+  squat_grf:
+    source: csv
+    path: data/squat_force.csv
+    description: Per-leg vertical ground-reaction force (N) across one squat rep
+  velocity_study:
+    source: csv
+    path: data/velocity_profiles.csv
+    description: Bar velocity (m/s) over the squat cycle, 10 subjects × 3 intensities
+  velocity_paired:
+    source: csv
+    path: data/velocity_paired.csv
+    description: Bar velocity (m/s) over the squat cycle, bounce vs no-bounce across 4 conditions
+  velocity_diffs:
+    source: csv
+    path: data/velocity_diffs.csv
+    description: Per-subject bounce−no-bounce differences for Vpeak1, Vpeak2 and Vmean
+  pareto_fronts:
+    source: csv
+    path: data/pareto_fronts.csv
+    description: Three Pareto frontiers (volume per well) over the wash moving-average, 12 reps each
 
 interactions:
   athlete_filter:

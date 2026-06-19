@@ -114,3 +114,63 @@ no recomputation, no re-fetching:
 
 ::component model_effects
 
+## The modeling pipeline
+
+Every number above flows through one path — raw sessions to fitted effects.
+Here it is as a graph: **drag the nodes**, pan and zoom. In the workshop the
+layout — and the nodes and edges themselves — is yours to edit.
+
+::component model_workflow
+
+## Reaction-time distributions
+
+Means hide the shape of the data. A **split violin** shows the full reaction-time
+distribution for each squad side by side, with a box plot for the quartiles, the
+mean (the dot) and any outliers — the raincloud view of a mixed-effects design.
+Hover a squad to highlight it across both plots.
+
+::component rt_panel
+
+## Limb asymmetry
+
+Strength is rarely symmetric. This **difference chart** overlays the left- and
+right-leg vertical force across a single squat rep: the band is green where the
+left leg drives harder and violet where the right does. The asymmetry shifts
+through the movement — biomechanically telling, and every colour, curve and
+line style is editable in the workshop.
+
+::component squat_asymmetry
+
+## Neuromuscular response
+
+Bar velocity tells the story of the lift. Here the mean velocity profile across
+the squat cycle is drawn for three loads, each a luminescent line with its 95%
+confidence band — heavier loads move slower through the propulsive phase. Click
+a load in the legend to isolate it; hover for a crosshair read-out across every
+series.
+
+::component velocity_bands
+
+## Bounce vs no-bounce
+
+The same neuromuscular question, faceted four ways. Each panel is one load or
+descent condition; the **solid** line is the bounce technique and the **dashed**
+line is no-bounce, both drawn as luminescent mean-velocity profiles. The inset
+box plot in every panel carries the bounce − no-bounce **difference** for the
+first peak (Vpeak1), second peak (Vpeak2) and mean velocity (Vmean) — a star
+marks p < 0.05. Toggle **Interact**, drag to **Pan**, brush to **Zoom**, switch
+the **View** between one and two columns, or **Export** the underlying data; the
+crosshair syncs across all four panels at once.
+
+::component neuromuscular_panels
+
+## Pareto frontiers
+
+Three Pareto frontiers of recoverable volume against the horizontal wash moving
+average. Each glowing line is a frontier mean; the **shaded area around it is the
+95% confidence interval**, drawn as a luminous gradient band. Toggle any frontier
+— or the **95% CI** area itself — in the legend, and hover for a crosshair
+read-out of all three frontiers plus the 95% CI (±) at that wash.
+
+::component pareto_frontiers
+

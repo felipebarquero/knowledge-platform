@@ -751,8 +751,8 @@ body {
   flex: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  justify-content: flex-start;
+  gap: 0.45rem;
   min-width: 0;
   padding: 0.3rem 0.3rem;
   background: none;
@@ -762,6 +762,9 @@ body {
   text-align: left;
   cursor: pointer;
 }
+.ws-item__btn .ws-item__type { margin-left: auto; }
+.ws-item__icon { flex: none; color: var(--text-muted); opacity: 0.9; }
+.ws-item__icon--component { color: var(--secondary, #c792ea); opacity: 1; }
 
 .ws-item__btn code {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -984,3 +987,366 @@ body {
 
 .ws-check input { accent-color: var(--accent); }
 .ws-check code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.76rem; }
+
+/* ── Builder-style click-to-select on the canvas ──────────────────── */
+
+.kp-pick {
+  position: relative;
+  cursor: pointer;
+  outline: 1.5px solid transparent;
+  outline-offset: 3px;
+  border-radius: 4px;
+  transition: outline-color 0.12s ease;
+}
+
+.kp-pick:hover {
+  outline-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* An ancestor yields its hover outline to the innermost hovered element. */
+.kp-pick:has(.kp-pick:hover) {
+  outline-color: transparent;
+}
+
+.kp-pick--active,
+.kp-pick--active:hover {
+  outline: 2px solid var(--accent);
+}
+
+/* Floating name tab on the selected element (Builder.io affordance). */
+.kp-pick--active::before {
+  content: attr(data-kp-name);
+  position: absolute;
+  top: -10px;
+  left: 8px;
+  z-index: 6;
+  padding: 0.05rem 0.45rem;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #0b0f17;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+/* ── Canvas breadcrumb path (card › child) ────────────────────────── */
+
+.ws-path { display: inline-flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
+
+.ws-path__crumb {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 0.12rem 0.65rem;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.ws-path__crumb:hover { color: var(--text); border-color: var(--accent); }
+.ws-path__crumb--current { color: var(--text); background: var(--glass-bg-strong); cursor: default; }
+.ws-path__sep { color: var(--text-muted); font-size: 0.7rem; opacity: 0.7; }
+
+/* ── Inspector mode toggle (Simple / Advanced) ────────────────────── */
+
+.ws-mode { padding: 0 1rem 0.55rem; }
+.ws-mode .ws-seg { width: 100%; }
+.ws-mode .ws-seg__btn { flex: 1; text-align: center; }
+
+/* ── Drag & drop composition ──────────────────────────────────────── */
+
+.ws-composer { display: flex; flex-direction: column; gap: 0.6rem; }
+
+.ws-compose { display: flex; flex-direction: column; gap: 0.3rem; }
+
+.ws-compose__item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 9px;
+  cursor: grab;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+
+.ws-compose__item:hover { border-color: var(--accent); }
+.ws-compose__item--dragging { opacity: 0.4; cursor: grabbing; }
+.ws-compose__item--over { box-shadow: inset 0 2.5px 0 var(--accent); border-color: var(--accent); }
+
+.ws-compose__grip { color: var(--text-muted); cursor: grab; line-height: 1; user-select: none; }
+.ws-compose__name {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.76rem;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+.ws-compose__name:hover { color: var(--accent); }
+.ws-compose__type { font-size: 0.66rem; color: var(--accent); }
+.ws-compose__remove {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+}
+.ws-compose__remove:hover { color: var(--error); }
+.ws-compose__empty { font-size: 0.74rem; color: var(--text-muted); padding: 0.4rem 0; }
+
+/* Drop zone shown on the composition area + the in-context canvas card. */
+.ws-dropzone {
+  border: 1.5px dashed var(--glass-border);
+  border-radius: 12px;
+  padding: 0.6rem;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.ws-dropzone--over {
+  border-color: var(--accent);
+  background: rgba(124, 154, 255, 0.08);
+}
+.ws-dropzone__hint { font-size: 0.72rem; color: var(--text-muted); text-align: center; }
+
+/* Palette of draggable components/kinds to drop into a card. */
+.ws-palette { display: flex; flex-direction: column; gap: 0.4rem; }
+.ws-palette__strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.4rem;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ws-palette__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.4rem 0.3rem;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  cursor: grab;
+  color: var(--text);
+  font: inherit;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.ws-palette__item:hover { border-color: var(--accent); transform: translateY(-1px); }
+.ws-palette__item:active { cursor: grabbing; }
+.ws-palette__thumb { display: grid; place-items: center; height: 40px; }
+.ws-palette__name {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.66rem;
+  text-align: center;
+  line-height: 1.2;
+  word-break: break-word;
+}
+.ws-palette__tab {
+  display: inline-flex;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+}
+.ws-palette__tab button {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 6px;
+}
+.ws-palette__tab button--active,
+.ws-palette__tab button.is-active { color: var(--text); background: var(--glass-bg-strong); }
+
+/* ── Flow editor (nodes + edges) ──────────────────────────────────── */
+
+.ws-flowlist { display: flex; flex-direction: column; gap: 0.3rem; }
+.ws-floweditnode {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.4rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 9px;
+  background: var(--glass-bg);
+}
+.ws-flowrow { display: flex; align-items: center; gap: 0.4rem; }
+.ws-flowrow input[type="text"] { flex: 1; min-width: 0; }
+.ws-flowrow input[type="color"] { flex: none; width: 26px; height: 26px; padding: 0; border-radius: 7px; }
+.ws-flowrow select { flex: 1; min-width: 0; }
+.ws-flowrow__id { font-size: 0.62rem; color: var(--text-muted); white-space: nowrap; }
+.ws-flowrow__arrow { color: var(--text-muted); font-size: 0.8rem; }
+
+/* ── Searchable icon picker ───────────────────────────────────────── */
+
+.ws-iconpicker { position: relative; display: inline-flex; align-items: center; gap: 0.3rem; }
+.ws-iconpicker__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 0.25rem 0.55rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.ws-iconpicker__trigger:hover { border-color: var(--accent); }
+.ws-iconpicker__plus { color: var(--text-muted); }
+.ws-iconpicker__name {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-iconpicker__pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: 284px;
+  background: rgba(22, 30, 44, 0.92);
+  backdrop-filter: blur(24px) saturate(170%);
+  -webkit-backdrop-filter: blur(24px) saturate(170%);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  box-shadow: var(--glass-shadow);
+  padding: 0.6rem;
+}
+.ws-iconpicker__search { width: 100%; box-sizing: border-box; margin-bottom: 0.5rem; }
+.ws-iconpicker__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ws-iconpicker__item {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  background: var(--glass-bg);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+}
+.ws-iconpicker__item:hover { border-color: var(--accent); background: var(--glass-bg-strong); }
+.ws-iconpicker__item.is-active { border-color: var(--accent); background: rgba(124, 154, 255, 0.18); }
+.ws-iconpicker__none { grid-column: 1 / -1; color: var(--text-muted); font-size: 0.74rem; padding: 0.6rem; text-align: center; }
+.ws-iconpicker__hint { margin: 0.4rem 0 0; font-size: 0.66rem; color: var(--text-muted); text-align: center; }
+
+/* ── Style presets (pre-made looks) ───────────────────────────────── */
+
+.ws-presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.4rem; }
+.ws-preset {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.ws-preset:hover { border-color: var(--accent); transform: translateY(-1px); }
+.ws-preset__label { line-height: 1.15; text-align: left; }
+.ws-preset__swatch {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.ws-preset__swatch--glass {
+  background:
+    radial-gradient(120% 90% at 15% -10%, rgba(255, 255, 255, 0.45), transparent 50%),
+    rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.32);
+}
+.ws-preset__swatch--frosted {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.05));
+  border-radius: 12px;
+}
+.ws-preset__swatch--flat { background: var(--surface-2); }
+.ws-preset__swatch--bordered { background: transparent; border: 1.5px solid var(--accent); }
+.ws-preset__swatch--soft { background: var(--surface-2); box-shadow: 0 6px 14px rgba(0, 0, 0, 0.55); }
+
+/* ── Selection → code panel (Lunagraph-style, under the canvas) ─────── */
+
+.ws-codepanel {
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  overflow: hidden;
+}
+.ws-codepanel__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.7rem;
+}
+.ws-codepanel__toggle {
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 650;
+  cursor: pointer;
+  padding: 0.15rem 0.45rem;
+  border-radius: 7px;
+}
+.ws-codepanel__toggle:hover { background: var(--surface-2); }
+.ws-codepanel__name {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+.ws-codepanel__copy {
+  margin-left: auto;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.ws-codepanel__copy:hover { color: var(--text); border-color: var(--accent); }
+.ws-codepanel__code {
+  margin: 0;
+  padding: 0.3rem 0.9rem 0.8rem;
+  max-height: 168px;
+  overflow: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  color: #a9b7c6;
+  white-space: pre;
+}

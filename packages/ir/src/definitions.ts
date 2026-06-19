@@ -29,6 +29,18 @@ export const componentTypeSchema = z.enum([
   "simulation",
   "callout",
   "diagram",
+  // Additive in 0.1: React Flow node-graph (nodes/edges/styling live in options).
+  "flow",
+  // Additive in 0.1: visx statistical distributions (split-capable, sync-aware).
+  "violin",
+  "box",
+  // Additive in 0.1: visx threshold/difference area (two series, above/below fill).
+  "threshold",
+  // Additive in 0.1: visx multi-series mean profiles + confidence bands (glowing).
+  "bands",
+  // Additive in 0.1: faceted small-multiples of paired profiles with inset
+  // difference box plots, a synced crosshair and a pan/zoom/view toolbar.
+  "panels",
   // Additive in 0.1 (Phase 4): HeroUI component library. Props/render live in
   // @knowledge/components (hero/); the IR only needs the type names. Keep this
   // list in sync with HERO_COMPONENTS keys in hero/hero-specs.ts.

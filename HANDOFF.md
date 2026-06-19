@@ -31,8 +31,10 @@ Markdown → IR → Everything else
 **Author background:** strong Python, likes TypeScript and ReScript. The core
 is TypeScript-first. Plots use **visx v4** (NOT Vega-Lite — explicitly ruled
 out). Animations use **anime.js v4**. Reactivity uses **Zustand**. SQL uses
-**DuckDB-WASM** + an on-prem gateway. R uses **WebR**. These were all the
-user's explicit picks — respect them.
+**DuckDB-WASM** + an on-prem gateway. R uses **WebR**. Flow/graph components use
+**React Flow** (`@xyflow/react` v12). Icons use **Iconify** (`@iconify/react` +
+offline `@iconify-json/*` collections). These were all the user's explicit picks
+— respect them.
 
 **How the user works with Claude:** they give terse, directive instructions and
 expect a lot of working software per turn, fully verified in the browser before
@@ -42,7 +44,7 @@ real files (offline); the studio is a preview/editor, not the source of truth.
 
 ---
 
-## 2. Status (all phases 1–5 built; 71 tests passing)
+## 2. Status (all phases 1–5 built + a large studio/viz overhaul; 76 tests passing)
 
 | Phase | What | State |
 |------|------|-------|
@@ -51,13 +53,15 @@ real files (offline); the studio is a preview/editor, not the source of truth.
 | 3 | Reactivity — Zustand sync engine, live controls | done |
 | 4 | Multi-renderer — read/slides/course/dashboard/paper, Slidev export, code blocks, hero header, HeroUI library | done |
 | 5 | Execution — DuckDB-WASM SQL (+JOINs), WebR R (lme4 runs), a shared **kernel** (SQL↔R, persistent R session), on-prem **query gateway** | done |
+| 6 | **Studio + viz overhaul** (see §19) — Builder-style direct-manipulation Workshop, editable cells + **document-scoped kernel** + **notebook (.ipynb/.md) export**, React Flow `flow` component, **Iconify** icons + searchable picker, liquid-glass + **style presets**, new visx charts (violin/box/threshold/bands/panels) | done |
 
 Remaining Phase-5 work (open): **reproducibility** — dataset versioning,
 query/result snapshot caching, deterministic re-runs. Execution works;
 provenance/caching does not exist yet.
 
 Git: the repo has had **no commits** the whole time (init only). Offer to
-commit; don't do it unprompted.
+commit; don't do it unprompted. The §19 work is all uncommitted in the working
+tree.
 
 ---
 
@@ -90,14 +94,18 @@ packages/
                  Read-only guard, CORS. Run with `npm run gateway`.
   components/    The React component layer (see §8). ComponentRenderer dispatches
                  every component type. option-specs.ts is the parameter registry.
-                 hero/ is the HeroUI library. Depends on data/ir/sync/runtime.
+                 hero/ is the HeroUI library. Flow.tsx (React Flow), Icon.tsx
+                 (Iconify), CodeEditor.tsx (editable cells). Depends on
+                 data/ir/sync/runtime.
   renderers/
     web/         DocumentView / NodeView — stateless (IR,data,csvMap) → JSX.
-                 Owns styles.css (all .kp-* and .hui-* CSS).
+                 Owns styles.css (all .kp-* and .hui-* CSS). notebook.ts =
+                 IR → .ipynb / .md exporter (§19).
     slides/      irToSlidev — pure IR → Slidev markdown text exporter.
 apps/
   studio/        :5173. Preview + Workshop (the authoring GUI). Vite dev server
                  with the workshop write-back middleware + COOP/COEP headers.
+                 Workshop helpers: friendly.ts, style-presets.ts, IconPicker.tsx.
   site/          The reader. `npm run read` → :4400 (dev), built preview :4173.
                  5 view modes by URL hash. This is what gets published.
 content/         The book. document.md (Markdown) + definitions.yaml (sidecar)
@@ -115,7 +123,7 @@ npm install                 # workspaces
 npm run dev                 # studio (Preview + Workshop)  → http://localhost:5173
 npm run read                # reader (the book)            → http://localhost:4400
 npm run gateway             # on-prem SQL gateway          → http://localhost:8787
-npm test                    # vitest (71 tests)
+npm test                    # vitest (76 tests)
 npm run typecheck           # tsc --noEmit (strict)
 npm run check:content       # the GATE: compile content → IR, fail on errors
 npm run build:site          # gate + production build of the reader
@@ -156,11 +164,13 @@ component, table, plot, chart, control, sync_binding, section, layout_grid
 
 **Component types** (`definitions.ts` `componentTypeSchema` enum): the native
 set (table, plot, chart, histogram, bars, area, dots, card, donut, density,
-sparkline, summary_table, code, sql, diagram, …) **plus all HeroUI types**
-(button, chip, badge, avatar, alert, tabs, … — see `hero/hero-specs.ts`).
-`ComponentDef` = `{ type, data?{ref}, encoding?, transforms?, options?,
-description?, children?[] }`. `options` is a free `Record<string,unknown>` —
-that's where almost all per-component config lives.
+sparkline, summary_table, code, sql, diagram, **flow**, **violin**, **box**,
+**threshold**, **bands**, **panels**, …) **plus all HeroUI types** (button, chip, badge,
+avatar, alert, tabs, … — see `hero/hero-specs.ts`). `ComponentDef` = `{ type,
+data?{ref}, encoding?, transforms?, options?, description?, children?[] }`.
+`encoding` carries x/y/**y2**/fill channels (y2 = the second series, used by
+`threshold` and `bands`). `options` is a free `Record<string,unknown>` — that's
+where almost all per-component config lives.
 
 **Validation** (`validate.ts`) is two-stage: Zod shape, then referential
 (every ref resolves; unused defs warn; **composition cycles error**; bindings
@@ -234,13 +244,34 @@ The heart of the rendering. Key files:
 - **`CellOutput.tsx`** — the Table/Plot/Text/Info output pane. `CellOutputData`
   = `{ text?, table?(rows), plot?(img src), info?(key→val) }`.
 - **`runtime-context.tsx`** — `CsvContext` provides dataset-name → CSV text to
-  SQL components anywhere in the tree (avoids prop-drilling).
+  SQL components anywhere in the tree (avoids prop-drilling). Also
+  `CellSessionContext`/`useCellSession` — carries the kernel **scope** (doc id),
+  the `editable` flag, an `onSourceChange` write-back, and a `register` hook so
+  cells enroll in **notebook export** (§19).
+- **`Flow.tsx`** — the `flow` component (lazy-loaded `@xyflow/react` v12).
+  `FlowView` + a custom `KpNode` (Iconify icon tile + label + sublabel + an
+  optional **embedded component** rendered inside the node). Hovering a node dims
+  the non-neighborhood; `onNodesPersist` writes drag positions back to the def;
+  sync inside nodes runs through `CardSyncContext`.
+- **`Icon.tsx`** — `Icon` (renders an Iconify glyph by name — the className is on
+  the `<svg>`) + `loadIconCatalog()` which lazy-loads the offline collections
+  (`@iconify-json/lucide`, `@iconify-json/logos`). Used by Flow nodes, the
+  iconized tree, and the studio icon picker.
+- **`CodeEditor.tsx`** — the editable-cell editor: a transparent `<textarea>`
+  layered over the highlighted `<pre>`, so `code`/`sql` cells are editable in both
+  the Workshop and the live reader (reader edits are **ephemeral** — lost on
+  reload; persist only via notebook export).
 
 ### Component catalog (two families)
 
 1. **Native** (charts/data): histogram, bars, area, dots, donut, density,
    sparkline, plot, chart, table (datatable), summary_table, diagram, code, sql,
-   card.
+   card, **flow** (React Flow graph), **violin** + **box** (visx statistical
+   distributions), **threshold** (visx difference/area), **bands** (visx
+   mean ± CI/SE/SD ribbons), **panels** (faceted small-multiples of paired glow
+   profiles + inset difference box plots + synced crosshair + pan/zoom toolbar).
+   The new visx charts live in `plots.tsx` (`ViolinPlot`/`BoxPlot`,
+   `ThresholdPlot`, `BandsPlot`, `PanelsPlot`); `flow` is `Flow.tsx`. See §19.
 2. **HeroUI library** (`hero/`): ~38 presentational components (button, chip,
    badge, avatar, user, image, link, kbd, divider, spacer, skeleton, spinner,
    progress, circular_progress, input, textarea, number_input, checkbox,
@@ -257,12 +288,16 @@ The heart of the rendering. Key files:
 
 ## 9. The Workshop — `apps/studio/src/Workshop.tsx`
 
-The authoring GUI (Storybook×Figma). Two modes via the studio header pill:
-**Preview** (renders the book via DocumentView) and **Workshop**.
+The authoring GUI (Storybook×Figma, with a Builder.io-style direct-manipulation
+layer added in §19). Two modes via the studio header pill: **Preview** (renders
+the book via DocumentView) and **Workshop**. A **Simple / Advanced** pill
+(`friendly.ts`) gates complexity: Simple surfaces the essentials; Advanced
+reveals YAML, transforms and the raw option groups.
 
-- **Sidebar tree**: components nest their card children; controls list in a
-  separate "Controls" section. `WorkshopSidebar` is shared between the component
-  and control editors. `editing: "component" | "control"` switches them.
+- **Iconized sidebar tree** (Figma-layers style): every row gets a type glyph via
+  `typeIconName` (Iconify); components nest their card/flow children; controls
+  list in a separate "Controls" section. `WorkshopSidebar` is shared between the
+  component and control editors. `editing: "component" | "control"` switches them.
 - **Wizard** (`CreateWizard` + `KindThumb` + `HeroThumb`): a visual catalog
   (shadcn-style thumbnails) grouped Containers/Charts/Data/Controls/HeroUI·*.
   Picking a kind + name creates a component with **type-aware seeding**
@@ -273,6 +308,22 @@ The authoring GUI (Storybook×Figma). Two modes via the studio header pill:
   `option-specs`. Each row = control + reset (↺ removes the key).
 - **In-context editing**: selecting a card child renders the parent card live
   with the draft injected (Solo / In-card toggle + breadcrumbs).
+- **Click-to-select / drag-to-compose** (Builder.io-style): clicking a rendered
+  child in the live card selects it (`selectable`/`activeName`/`onPick` thread
+  through ComponentRenderer); dragging a catalog kind onto a card appends it to
+  `children`. `CardComposer` manages the child list.
+- **Selection → code panel** (bottom): the selected component shown as editable
+  JSX-ish source (`defToJsx`) for power users — a text projection of the same def
+  the inspector edits (Lunagraph-inspired).
+- **Style presets** (`style-presets.ts`): a Nomad-Sculpt-style panel of named,
+  one-click style bundles — Liquid Glass · Tahoe, Frosted, Flat, Bordered, Soft
+  Dark — applied via `setOption`, then still tweakable per-option. `presetsFor(type)`
+  picks the relevant set.
+- **Icon picker** (`IconPicker.tsx`): a searchable grid over the loaded Iconify
+  collections, for any `"icon"`-kind option (e.g. flow-node icons).
+- **Flow editor** (`FlowEditor`): edit a `flow` component's nodes/edges visually —
+  add/label nodes, set a per-node icon + embedded component, drag to lay out;
+  positions persist back to the def.
 - **Controls are first-class** (`ControlEditor`): creating a slider/selector/
   toggle makes a standalone control with its own live preview (`LiveControl`) +
   inspector (Control/Appearance/Behavior/YAML), saved to `interactions`.
@@ -303,9 +354,12 @@ The reader is **5 stateless projections of the same compiled IR**, by URL hash:
 `#read` (default), `#slides` (paginate at heading ≤2, arrow keys), `#course`
 (lesson sidebar + localStorage progress), `#dashboard` (controls row + 2-col
 widget grid), `#paper` (light serif + print CSS → PDF via browser print).
-External target: `packages/renderers/slides` `irToSlidev` (pure text exporter;
-components become labeled pointers, never silently dropped). A dedicated PDF
-engine (Typst/Paged.js) is an open decision.
+External targets: `packages/renderers/slides` `irToSlidev` (pure text exporter;
+components become labeled pointers, never silently dropped) and
+`packages/renderers/web/notebook.ts` `irToNotebook`/`irToMarkdownDoc` — the
+reader's bottom **export bar** downloads the document's code/SQL cells (source +
+recorded results, **no datasets**) as a Jupyter `.ipynb` or Markdown. A dedicated
+PDF engine (Typst/Paged.js) is an open decision.
 
 ---
 
@@ -337,7 +391,10 @@ instantly and are the fallback where execution isn't available.
 
 ## 13. The kernel (SQL↔R + persistent R) — `packages/runtime/src/kernel.ts`
 
-A **shared notebook-style session**:
+**Scoped** — `getKernel(scope)` returns the session for a scope key (the document
+id, so a chapter/article shares one kernel while different docs stay isolated); a
+`Map` caches them. `CellSessionContext` (§8) threads the scope to every cell.
+Within a scope it is a **shared notebook-style session**:
 1. **Shared table registry.** SQL cells call `kernel.provideTable(name, rows)`;
    the kernel materializes every table as a real R **data frame**, so an R cell
    uses a SQL result directly (e.g. `sprint_query$mean_time`). Recorded
@@ -413,8 +470,9 @@ connection config shape.
 
 ## 16. Testing & the gate
 
-- `npm test` — vitest, 8 files / 71 tests (ir, compiler, data, sql, sync,
-  components/animation, components/hero, slides). Add tests with new logic.
+- `npm test` — vitest, 9 files / 76 tests (ir, compiler, data, sql, sync,
+  components/animation, components/hero, slides, renderers/web notebook).
+  Add tests with new logic.
 - `npm run typecheck` — strict, no `any`.
 - `npm run check:content` — compiles `content/` to IR; **exit 1 on any error**.
   This is the CI gate (`.github/workflows/publish.yml`: gate → build → Pages).
@@ -443,3 +501,96 @@ connection config shape.
   background context, not instructions — verify file:line claims before acting.
 - When you finish a chunk: typecheck, test, gate, browser-verify, then state
   plainly what works. The user values faithful reporting over hedging.
+
+---
+
+## 19. Post-Phase-5 studio + viz overhaul (this batch — uncommitted)
+
+A large round of work after Phase 5, all additive and honoring §1's layering
+rule (new chart types are additive IR enum values; all imperative drawing stays
+in `plots.tsx`; presets/picker/flow-editor are editor-only). Gate after this
+batch: **56 nodes, 37 components, 10 datasets, 0 errors**; **76 tests** green.
+
+### New component types (IR enum + `plots.tsx` / `Flow.tsx`)
+- **`flow`** — a React Flow graph (`@xyflow/react` v12, lazy). Custom `KpNode`
+  with an Iconify icon, label/sublabel, and an **embedded component** inside the
+  node (AWS-diagram-style); drag/pan/zoom, positions persist back to the def.
+  Example: `model_workflow` (the modeling-pipeline graph).
+- **`violin`** + **`box`** — visx statistical distributions (KDE per group via
+  `bin`+`smoothCounts`; `split` = raincloud half-violins; box overlay with
+  Q1/median/Q3, 1.5·IQR whiskers, outlier + **mean** dots). Card-scoped hover
+  sync (`fill` is the sync key) + stats tooltip. Example: `reaction_violin` /
+  `reaction_box` inside the `rt_panel` card (reaction time by squad/condition).
+- **`threshold`** — visx difference/area (`@visx/threshold`): two series
+  (`encoding.y`, `encoding.y2`), filled above/below where one exceeds the other,
+  nearest-point tooltip. Example: `squat_asymmetry` (left vs right leg force).
+- **`bands`** — mean ± band (none / sd / se / ci95) ribbons per `fill` series,
+  glow filter for luminescent lines, interactive legend (click to isolate),
+  multi-series crosshair tooltip. Options added for the **CI-area** look:
+  `bandGradient` (luminous vertical-gradient ribbons), `palette` (csv-hex colour
+  override), `xLabel` (tooltip header); the legend is checkbox-style with a
+  dedicated **"95% CI"** toggle (`bandsOn`) and the tooltip carries a `95% CI (±)`
+  line. Examples: `velocity_bands` (bar-velocity by load) and `pareto_frontiers`
+  (3 Pareto frontiers each with a gradient 95% CI area — the Pareto reference
+  image; red/green/blue palette, markers, CI toggle).
+- **`panels`** — faceted small-multiples (`PanelsPlot`). One panel per
+  `encoding.facet` value; within each, the `encoding.fill` series split into a
+  **solid + dashed** pair of glowing mean profiles (`solidSeries` option). Each
+  panel carries an **inset difference box plot** from a second dataset
+  (`options.insetRef`, resolved via `dataMap`) with a significance `*` (CI₉₅
+  excludes 0). A **crosshair syncs across all panels**; the glass **toolbar** is
+  live (Interact gate, Pan-drag, Zoom-brush, Reset, View 1↔2 col via
+  ResizeObserver, Export CSV). Self-measures width (no `chartBox`). Example:
+  `neuromuscular_panels` (bounce vs no-bounce velocity, the multi-panel
+  reference image).
+
+### Editable cells + scoped kernel + notebook export
+- **Editable `code`/`sql` cells** everywhere (`CodeEditor.tsx`): transparent
+  textarea over highlighted pre. Reader edits are **ephemeral** (lost on reload).
+- **Document-scoped kernel** (`getKernel(scope)`, §13) keyed by doc id;
+  `CellSessionContext` threads scope + the `editable`/`onSourceChange`/`register`
+  hooks to every cell.
+- **Notebook export** (`renderers/web/notebook.ts`): the reader's bottom export
+  bar downloads `.ipynb` / `.md` with cell **source + recorded results but NOT
+  datasets** (data stays in the page). 5 tests in `notebook.test.ts`.
+
+### Icons (Iconify)
+- `Icon.tsx` + `loadIconCatalog()` lazy-load offline `@iconify-json/lucide` and
+  `@iconify-json/logos`. Searchable studio picker (`IconPicker.tsx`) for any
+  `"icon"`-kind option; the sidebar tree is iconized via `typeIconName`. (Chose
+  Iconify over react-icons: offline collections, render-by-name. The `Icon`
+  className lands on the `<svg>`.)
+
+### Builder.io-style Workshop + style presets (§9)
+- Click-to-select rendered children, drag-catalog-onto-card to compose,
+  **Simple / Advanced** mode (`friendly.ts`), a **Selection → code** (`defToJsx`)
+  bottom panel, the iconized tree, and **style presets** (`style-presets.ts`:
+  Tahoe liquid glass, Frosted, Flat, Bordered, Soft Dark — one click, still
+  tweakable; Nomad-Sculpt-inspired panel).
+
+### New dependencies
+`@xyflow/react`, `@iconify/react`, `@iconify-json/lucide`, `@iconify-json/logos`,
+`@visx/threshold`. `packages/components/src/css.d.ts` declares `*.css` and the
+iconify-json `*.json` modules for TS.
+
+### New files
+`components/src/{Flow,Icon,CodeEditor}.tsx`, `components/src/css.d.ts`,
+`renderers/web/src/notebook.ts` (+ `test/notebook.test.ts`),
+`studio/src/{friendly.ts,style-presets.ts,IconPicker.tsx}`.
+
+### New content (deterministically generated)
+`content/data/{reaction_times,squat_force,velocity_profiles,velocity_paired,velocity_diffs,pareto_fronts}.csv`;
+`definitions.yaml` defs `model_workflow`, `coef_spark` (currently unused →
+warning), `reaction_violin`/`reaction_box`, `rt_panel`, `squat_asymmetry`,
+`velocity_bands`, `neuromuscular_panels` (the `panels` example; its
+`velocity_diffs` inset dataset shows a benign UNUSED_DATASET warning since it is
+referenced via `options.insetRef`, not a `data.ref`), `pareto_frontiers` (the
+`bands` CI-area example); new `document.md` sections (modeling pipeline,
+reaction-time distributions, limb asymmetry, neuromuscular response, bounce vs
+no-bounce, pareto frontiers).
+
+### Gotcha (dev-only)
+A **cold-start Vite reload storm** (optimizing `@xyflow/react` / iconify / duckdb
+on first load) can leave a stale chunk → a flow renders 0 edges or tree icons
+don't paint. **Restart the reader server** (clean rebuild) before judging — it's
+not a code bug.

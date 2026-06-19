@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { CellOutput, cellTabs } from "./CellOutput";
 import type { CellOutputData } from "./CellOutput";
+import { CodeEditor } from "./CodeEditor";
+import { useCellSession } from "./runtime-context";
 
 /**
  * Syntax-highlighted code block (zero dependencies). The tokenizer is a
@@ -129,6 +131,8 @@ export interface CodeBlockProps {
   uses?: string[];
   /** Auto-run live on mount (default true when runtime is set). */
   autoRun?: boolean;
+  /** Stable id (the component name) — used as the notebook-export cell key. */
+  cellId?: string;
 }
 
 type RunStatus = "idle" | "running" | "ok" | "error";
@@ -146,19 +150,47 @@ export function CodeBlock({
   inject,
   uses,
   autoRun = true,
+  cellId,
 }: CodeBlockProps) {
+  const { scope, editable, onSourceChange, register } = useCellSession();
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<RunStatus>("idle");
   const [liveOutput, setLiveOutput] = useState<CellOutputData | null>(null);
   const [liveMs, setLiveMs] = useState<number | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string>("");
-  const lines = code.replace(/\n$/, "").split("\n");
+  // Editable draft: ephemeral in the reader (reset when the IR `code` prop
+  // changes, i.e. on reload); persisted in the studio via `onSourceChange`.
+  const [draft, setDraft] = useState(code);
+  useEffect(() => setDraft(code), [code]);
+  const dirty = draft !== code;
+  const lines = draft.replace(/\n$/, "").split("\n");
   const shown = liveOutput ?? output;
   const tabs = shown ? cellTabs(shown) : [];
+  const key = cellId ?? title;
+
+  const onEdit = (value: string) => {
+    setDraft(value);
+    if (onSourceChange && key) onSourceChange(key, value);
+  };
+
+  // Publish current source + latest output to the notebook-export registry.
+  useEffect(() => {
+    if (!register || !key) return;
+    register(key, {
+      source: draft,
+      language,
+      kind: "code",
+      outputs: shown
+        ? { text: shown.text, table: shown.table, plot: shown.plot, info: shown.info, error: runError ?? undefined }
+        : runError
+          ? { error: runError }
+          : undefined,
+    });
+  }, [register, key, draft, language, shown, runError]);
 
   const copy = () => {
-    void navigator.clipboard?.writeText(code).then(() => {
+    void navigator.clipboard?.writeText(draft).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1400);
     });
@@ -171,13 +203,13 @@ export function CodeBlock({
     setProgress("starting R…");
     try {
       // Auto-detect packages to install from library(...) calls.
-      const packages = [...code.matchAll(/library\(([A-Za-z0-9._]+)\)/g)].map((m) => m[1]!);
+      const packages = [...draft.matchAll(/library\(([A-Za-z0-9._]+)\)/g)].map((m) => m[1]!);
       if (packages.length) setProgress(`installing ${packages.join(", ")}…`);
       else setProgress("running in R…");
-      const { kernel } = await import("@knowledge/runtime");
-      // Runs in the shared session: SQL results are data frames here, and
-      // variables from earlier R cells persist.
-      const result = await kernel.runR(code, {
+      const { getKernel } = await import("@knowledge/runtime");
+      // Runs in the document-scoped session: SQL results are data frames here,
+      // and variables from earlier R cells in the same scope persist.
+      const result = await getKernel(scope).runR(draft, {
         packages,
         datasets: inject ? { [inject.name]: inject.rows } : {},
         uses,
@@ -222,6 +254,16 @@ export function CodeBlock({
           {status === "error" && <span className="kp-sql__error">✗ R error</span>}
           {status === "idle" && elapsed && <span className="kp-codeblock__elapsed">✓ {elapsed}</span>}
           {language !== "text" && <span className="kp-codeblock__lang">{language}</span>}
+          {editable && dirty && (
+            <button
+              type="button"
+              className="kp-codeblock__copy kp-cell-edited"
+              onClick={() => onEdit(code)}
+              title="Reset to original"
+            >
+              edited ↺
+            </button>
+          )}
           {runtime === "r" && (
             <button
               type="button"
@@ -237,17 +279,29 @@ export function CodeBlock({
           </button>
         </span>
       </header>
-      <pre className={`kp-codeblock__pre ${wrap ? "kp-codeblock__pre--wrap" : ""}`}>
-        <code>
-          {/* Only the code carries line numbers; the output pane never does. */}
-          {lines.map((line, i) => (
-            <span key={i} className="kp-code__line">
-              {lineNumbers && <span className="kp-code__num">{i + 1}</span>}
-              <span className="kp-code__content">{highlightLine(line, language)}</span>
-            </span>
-          ))}
-        </code>
-      </pre>
+      {editable ? (
+        <CodeEditor
+          value={draft}
+          onChange={onEdit}
+          language={language}
+          lineNumbers={lineNumbers}
+          fontSize={fontSize}
+          wrap={wrap}
+          onRun={runtime === "r" ? () => void execute() : undefined}
+        />
+      ) : (
+        <pre className={`kp-codeblock__pre ${wrap ? "kp-codeblock__pre--wrap" : ""}`}>
+          <code>
+            {/* Only the code carries line numbers; the output pane never does. */}
+            {lines.map((line, i) => (
+              <span key={i} className="kp-code__line">
+                {lineNumbers && <span className="kp-code__num">{i + 1}</span>}
+                <span className="kp-code__content">{highlightLine(line, language)}</span>
+              </span>
+            ))}
+          </code>
+        </pre>
+      )}
       {runError && <div className="kp-cell-error">✗ {runError}{output ? " — showing recorded output" : ""}</div>}
       {tabs.length > 0 && shown && <CellOutput data={shown} />}
     </figure>
